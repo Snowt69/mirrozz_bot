@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 # Database setup
 def init_db():
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     
     cursor.execute('''
@@ -238,7 +238,7 @@ def generate_random_string(length=8):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
 def log_event(level: str, message: str):
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute(
         'INSERT INTO logs (level, message, log_date) VALUES (?, ?, ?)',
@@ -249,7 +249,7 @@ def log_event(level: str, message: str):
     logger.log(getattr(logging, level.upper()), message)
 
 def get_user_info(user_id: int) -> dict:
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
     user = cursor.fetchone()
@@ -272,7 +272,7 @@ def get_user_info(user_id: int) -> dict:
     return None
 
 def update_user_visit(user_id: int, username: str, first_name: str, last_name: str):
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     
     cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
@@ -293,7 +293,7 @@ def is_admin(user_id: int) -> bool:
     if user_id in ADMINS:
         return True
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM admins WHERE admin_id = ?', (user_id,))
     admin = cursor.fetchone()
@@ -305,7 +305,7 @@ def is_developer(user_id: int) -> bool:
     return user_id in DEVELOPERS
 
 def is_banned(user_id: int) -> bool:
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT is_banned FROM users WHERE user_id = ?', (user_id,))
     result = cursor.fetchone()
@@ -314,7 +314,7 @@ def is_banned(user_id: int) -> bool:
     return result and result[0] == 1
 
 async def check_subscription(user_id: int, check_type: int = 1) -> bool:
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT channel_id FROM advertise_channels WHERE check_type = ?', (check_type,))
     channels = cursor.fetchall()
@@ -471,7 +471,7 @@ async def cmd_start(message: Message):
         link_id = start_args[1]
         
         if not await check_subscription(message.from_user.id, 2):
-            conn = sqlite3.connect('bot_mirrozz_database.db')
+            conn = sqlite3.connect('/root/bot_mirrozz_database.db')
             cursor = conn.cursor()
             cursor.execute('SELECT channel_id, username, title FROM advertise_channels WHERE check_type = 2')
             channels = cursor.fetchall()
@@ -541,7 +541,7 @@ async def cmd_start(message: Message):
     # Если есть аргумент, обрабатываем ссылку
     if len(start_args) > 1:
         link_id = start_args[1]
-        conn = sqlite3.connect('bot_mirrozz_database.db')
+        conn = sqlite3.connect('/root/bot_mirrozz_database.db')
         cursor = conn.cursor()
         cursor.execute('SELECT * FROM links WHERE link_id = ?', (link_id,))
         link = cursor.fetchone()
@@ -651,7 +651,7 @@ async def cmd_report(message: Message, state: FSMContext):
     report_text = args[1]
     user = message.from_user
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute(
         'INSERT INTO reports (user_id, message, report_date) VALUES (?, ?, ?)',
@@ -708,7 +708,7 @@ async def admin_stats_callback(callback: CallbackQuery):
         await callback.answer("❌ У вас нет доступа.")
         return
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     
     cursor.execute('SELECT COUNT(*) FROM users')
@@ -816,7 +816,7 @@ async def create_custom_link_id_handler(message: Message, state: FSMContext):
         await message.answer("❌ ID ссылки должен состоять из 8 букв или цифр.")
         return
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM links WHERE link_id = ?', (link_id,))
     if cursor.fetchone():
@@ -849,7 +849,7 @@ async def skip_link_file(message: Message, state: FSMContext):
     
     link_id = generate_random_string(8)
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute(
         'INSERT INTO links (link_id, content_type, content_text, created_by, creation_date) VALUES (?, ?, ?, ?, ?)',
@@ -889,7 +889,7 @@ async def create_link_file_handler(message: Message, state: FSMContext):
     
     link_id = generate_random_string(8)
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute(
         'INSERT INTO links (link_id, content_type, content_text, content_file_id, created_by, creation_date) VALUES (?, ?, ?, ?, ?, ?)',
@@ -912,7 +912,7 @@ async def delete_link_callback(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ У вас нет доступа.")
         return
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT link_id, content_text, created_by, creation_date, visits FROM links ORDER BY creation_date DESC')
     links = cursor.fetchall()
@@ -988,7 +988,7 @@ async def confirm_delete_link_callback(callback: CallbackQuery):
     
     link_id = callback.data.split('_')[3]
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('DELETE FROM links WHERE link_id = ?', (link_id,))
     conn.commit()
@@ -1005,7 +1005,7 @@ async def list_links_callback(callback: CallbackQuery):
         await callback.answer("❌ У вас нет доступа.")
         return
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT link_id, created_by, creation_date, visits FROM links ORDER BY creation_date DESC LIMIT 10')
     links = cursor.fetchall()
@@ -1111,7 +1111,7 @@ async def add_admin_handler(message: Message, state: FSMContext):
             await state.clear()
             return
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM admins WHERE admin_id = ?', (user_id,))
     existing_admin = cursor.fetchone()
@@ -1140,7 +1140,7 @@ async def remove_admin_callback(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ У вас нет доступа.")
         return
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT admin_id, username, first_name, last_name FROM admins')
     admins = cursor.fetchall()
@@ -1205,7 +1205,7 @@ async def confirm_remove_admin_callback(callback: CallbackQuery):
     
     admin_id = int(callback.data.split('_')[3])
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('DELETE FROM admins WHERE admin_id = ?', (admin_id,))
     conn.commit()
@@ -1222,7 +1222,7 @@ async def list_admins_callback(callback: CallbackQuery):
         await callback.answer("❌ У вас нет доступа.")
         return
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT admin_id, username, first_name, last_name, added_by, add_date FROM admins')
     admins = cursor.fetchall()
@@ -1270,7 +1270,7 @@ async def all_reports_callback(callback: CallbackQuery):
         await callback.answer("❌ У вас нет доступа.")
         return
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT report_id, user_id, message, report_date FROM reports WHERE status = "open" ORDER BY report_date DESC LIMIT 10')
     reports = cursor.fetchall()
@@ -1330,7 +1330,7 @@ async def answer_report_handler(message: Message, state: FSMContext):
     report_id = data['report_id']
     answer_text = message.text
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT user_id FROM reports WHERE report_id = ?', (report_id,))
     user_id = cursor.fetchone()[0]
@@ -1362,7 +1362,7 @@ async def delete_report_callback(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ У вас нет доступа.")
         return
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT report_id, user_id, message, report_date FROM reports ORDER BY report_date DESC')
     reports = cursor.fetchall()
@@ -1436,7 +1436,7 @@ async def confirm_delete_report_callback(callback: CallbackQuery):
     
     report_id = int(callback.data.split('_')[3])
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('DELETE FROM reports WHERE report_id = ?', (report_id,))
     conn.commit()
@@ -1453,7 +1453,7 @@ async def report_list_callback(callback: CallbackQuery):
         await callback.answer("❌ У вас нет доступа.")
         return
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT report_id, user_id, message, report_date, status FROM reports ORDER BY report_date DESC LIMIT 10')
     reports = cursor.fetchall()
@@ -1626,7 +1626,7 @@ async def ban_user_handler(message: Message, state: FSMContext):
     user_id = data['user_id']
     ban_reason = message.text
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute(
         'UPDATE users SET is_banned = 1, ban_reason = ?, banned_by = ?, ban_date = ? WHERE user_id = ?',
@@ -1656,7 +1656,7 @@ async def unban_user_callback(callback: CallbackQuery):
     
     user_id = int(callback.data.split('_')[1])
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute(
         'UPDATE users SET is_banned = 0, ban_reason = NULL, banned_by = NULL, ban_date = NULL WHERE user_id = ?',
@@ -1681,7 +1681,7 @@ async def banned_users_callback(callback: CallbackQuery):
         await callback.answer("❌ У вас нет доступа.")
         return
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT user_id, username, first_name, last_name, ban_reason, banned_by, ban_date FROM users WHERE is_banned = 1')
     banned_users = cursor.fetchall()
@@ -1802,7 +1802,7 @@ async def add_advertise_handler(message: Message, state: FSMContext):
             await state.clear()
             return
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM advertise_channels WHERE channel_id = ?', (channel_id,))
     existing_channel = cursor.fetchone()
@@ -1830,7 +1830,7 @@ async def add_advertise_type_callback(callback: CallbackQuery, state: FSMContext
     username = data['username']
     title = data['title']
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute(
         'INSERT INTO advertise_channels (channel_id, username, title, added_by, add_date, check_type) VALUES (?, ?, ?, ?, ?, ?)',
@@ -1851,7 +1851,7 @@ async def remove_advertise_callback(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ У вас нет доступа.")
         return
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT channel_id, username, title FROM advertise_channels')
     channels = cursor.fetchall()
@@ -1916,7 +1916,7 @@ async def confirm_remove_channel_callback(callback: CallbackQuery):
     
     channel_id = int(callback.data.split('_')[3])
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('DELETE FROM advertise_channels WHERE channel_id = ?', (channel_id,))
     conn.commit()
@@ -1933,7 +1933,7 @@ async def list_advertise_callback(callback: CallbackQuery):
         await callback.answer("❌ У вас нет доступа.")
         return
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT channel_id, username, title, added_by, add_date, check_type, subscribers_count FROM advertise_channels')
     channels = cursor.fetchall()
@@ -2049,7 +2049,7 @@ async def confirm_reset_database_callback(callback: CallbackQuery):
         os.system(f"cp bot_mirrozz_database.db {backup_file}")
         
         # Reset database
-        conn = sqlite3.connect('bot_mirrozz_database.db')
+        conn = sqlite3.connect('/root/bot_mirrozz_database.db')
         cursor = conn.cursor()
         
         # Drop all tables
@@ -2085,7 +2085,7 @@ async def last_database_update_callback(callback: CallbackQuery):
         return
     
     try:
-        conn = sqlite3.connect('bot_mirrozz_database.db')
+        conn = sqlite3.connect('/root/bot_mirrozz_database.db')
         cursor = conn.cursor()
         
         # Get latest update from logs
@@ -2143,7 +2143,7 @@ async def load_database_handler(message: Message, state: FSMContext):
         os.system(f"mv {file_path} bot_mirrozz_database.db")
         
         # Verify database integrity
-        conn = sqlite3.connect('bot_mirrozz_database.db')
+        conn = sqlite3.connect('/root/bot_mirrozz_database.db')
         cursor = conn.cursor()
         cursor.execute('PRAGMA integrity_check')
         integrity = cursor.fetchone()[0]
@@ -2203,7 +2203,7 @@ async def send_system_message_handler(message: Message, state: FSMContext):
     
     message_text = message.text
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT user_id FROM users WHERE is_banned = 0')
     users = cursor.fetchall()
@@ -2235,7 +2235,7 @@ async def message_history_callback(callback: CallbackQuery):
         await callback.answer("❌ У вас нет доступа.")
         return
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT message_id, message_text, sent_by, send_date, recipients_count FROM system_messages ORDER BY send_date DESC LIMIT 10')
     messages = cursor.fetchall()
@@ -2296,7 +2296,7 @@ async def list_errors_callback(callback: CallbackQuery):
         return
     
     try:
-        conn = sqlite3.connect('bot_mirrozz_database.db')
+        conn = sqlite3.connect('/root/bot_mirrozz_database.db')
         cursor = conn.cursor()
         cursor.execute('SELECT log_id, level, message, log_date FROM logs ORDER BY log_date DESC LIMIT 10')
         logs = cursor.fetchall()
@@ -2330,7 +2330,7 @@ async def error_status_callback(callback: CallbackQuery):
     
     try:
         # Получаем статистику ошибок из базы данных
-        conn = sqlite3.connect('bot_mirrozz_database.db')
+        conn = sqlite3.connect('/root/bot_mirrozz_database.db')
         cursor = conn.cursor()
         
         # Общее количество ошибок
@@ -2421,7 +2421,7 @@ async def confirm_clear_logs_callback(callback: CallbackQuery):
     
     try:
         # Очистка логов в базе данных
-        conn = sqlite3.connect('bot_mirrozz_database.db')
+        conn = sqlite3.connect('/root/bot_mirrozz_database.db')
         cursor = conn.cursor()
         cursor.execute('DELETE FROM logs')
         conn.commit()
@@ -2452,7 +2452,7 @@ async def confirm_clear_logs_callback(callback: CallbackQuery):
             shutil.copy("bot_mirrozz.log", backup_file)
         
         # Clear database logs
-        conn = sqlite3.connect('bot_mirrozz_database.db')
+        conn = sqlite3.connect('/root/bot_mirrozz_database.db')
         cursor = conn.cursor()
         cursor.execute('DELETE FROM logs')
         conn.commit()
@@ -2538,7 +2538,7 @@ async def add_developer_handler(message: Message, state: FSMContext):
             await state.clear()
             return
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM developers WHERE developer_id = ?', (user_id,))
     existing_developer = cursor.fetchone()
@@ -2569,7 +2569,7 @@ async def remove_developer_callback(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ У вас нет доступа.")
         return
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT developer_id, username, first_name, last_name FROM developers')
     developers = cursor.fetchall()
@@ -2639,7 +2639,7 @@ async def confirm_remove_developer_callback(callback: CallbackQuery):
         await callback.answer()
         return
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('DELETE FROM developers WHERE developer_id = ?', (developer_id,))
     conn.commit()
@@ -2659,7 +2659,7 @@ async def list_developers_callback(callback: CallbackQuery):
         await callback.answer("❌ У вас нет доступа.")
         return
     
-    conn = sqlite3.connect('bot_mirrozz_database.db')
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT developer_id, username, first_name, last_name, added_by, add_date FROM developers')
     developers = cursor.fetchall()
