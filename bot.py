@@ -135,7 +135,7 @@ def init_db():
 init_db()
 
 # Bot setup
-bot = Bot(token="7542243439:AAGp13iRF_5vWtLEGi_shrXT31q98W--BXY")
+bot = Bot(token="7542243439:AAGqq7qd3rC61-zsueltQUC9N69nVrIIsQc")
 dp = Dispatcher()
 BOT_START_TIME = time.time()
 
