@@ -1722,7 +1722,7 @@ async def admin_developer_callback(callback: CallbackQuery):
     keyboard = InlineKeyboardBuilder()
     keyboard.add(InlineKeyboardButton(text="💾 База данных", callback_data="developer_database"))
     keyboard.add(InlineKeyboardButton(text="📨 Сообщения", callback_data="developer_messages"))
-    keyboard.add(InlineKeyboardButton(text="🚫 Ошибки", callback_data="developer_logs"))
+    keyboard.add(InlineKeyboardButton(text="🚫 Ошибки", callback_data="developer_errors"))
     keyboard.add(InlineKeyboardButton(text="👨‍💻 Разработчики", callback_data="developer_developers"))
     keyboard.add(InlineKeyboardButton(text="🖥 Сервер", callback_data="developer_server"))
     keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back"))
@@ -2012,36 +2012,6 @@ async def message_history_callback(callback: CallbackQuery):
     await callback.answer()
     log_event('INFO', f"Developer {callback.from_user.id} viewed message history")
 
-# Developer logs callback
-@dp.callback_query(F.data == "developer_logs")
-async def developer_logs_callback(callback: CallbackQuery):
-    if not is_developer(callback.from_user.id):
-        await callback.answer("❌ У вас нет доступа.")
-        return
-    
-    conn = sqlite3.connect('bot_mirrozz_database.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT log_id, level, message, log_date FROM logs ORDER BY log_date DESC LIMIT 10')
-    logs = cursor.fetchall()
-    conn.close()
-    
-    if not logs:
-        await callback.message.answer("❌ Нет логов.")
-        await callback.answer()
-        return
-    
-    logs_text = f"{hbold('🚫 Последние 10 логов')}\n\n"
-    for log in logs:
-        log_id, level, message, log_date = log
-        logs_text += f"🆔 ID лога: {log_id}\n"
-        logs_text += f"📊 Уровень: {level}\n"
-        logs_text += f"📅 Дата: {log_date}\n"
-        logs_text += f"📝 Сообщение: {message[:50]}...\n\n"
-    
-    await callback.message.answer(logs_text, parse_mode=ParseMode.HTML)
-    await callback.answer()
-    log_event('INFO', f"Developer {callback.from_user.id} viewed logs")
-
 @dp.callback_query(F.data == "developer_errors")
 async def developer_errors_callback(callback: CallbackQuery):
     if not is_developer(callback.from_user.id):
@@ -2064,7 +2034,7 @@ async def developer_errors_callback(callback: CallbackQuery):
     )
     await callback.answer()
 
-# List errors callback
+# Список ошибок
 @dp.callback_query(F.data == "list_errors")
 async def list_errors_callback(callback: CallbackQuery):
     if not is_developer(callback.from_user.id):
@@ -2079,47 +2049,26 @@ async def list_errors_callback(callback: CallbackQuery):
         conn.close()
         
         if not logs:
-            keyboard = InlineKeyboardBuilder()
-            keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="developer_errors"))
-            await callback.message.edit_text(
-                "❌ Нет логов.",
-                reply_markup=keyboard.as_markup(),
-                parse_mode=ParseMode.HTML
-            )
+            await callback.message.answer("❌ Нет логов.")
             await callback.answer()
             return
         
-        logs_text = f"{hbold('🚫 Последние 10 логов')}\n\n"
+        logs_text = f"{hbold('🚫 Последние 10 ошибок')}\n\n"
         for log in logs:
             log_id, level, message, log_date = log
-            logs_text += f"🆔 ID лога: {log_id}\n"
+            logs_text += f"🆔 ID: {log_id}\n"
             logs_text += f"📊 Уровень: {level}\n"
             logs_text += f"📅 Дата: {log_date}\n"
-            logs_text += f"📝 Сообщение: {message[:50]}...\n\n"
+            logs_text += f"📝 Сообщение: {message[:100]}...\n\n"
         
-        keyboard = InlineKeyboardBuilder()
-        keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="developer_errors"))
-        
-        await callback.message.edit_text(
-            logs_text,
-            reply_markup=keyboard.as_markup(),
-            parse_mode=ParseMode.HTML
-        )
-        log_event('INFO', f"Developer {callback.from_user.id} viewed error logs")
+        await callback.message.answer(logs_text, parse_mode=ParseMode.HTML)
+        await callback.answer()
         
     except Exception as e:
-        keyboard = InlineKeyboardBuilder()
-        keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="developer_errors"))
-        await callback.message.edit_text(
-            f"❌ Ошибка при получении логов: {str(e)}",
-            reply_markup=keyboard.as_markup(),
-            parse_mode=ParseMode.HTML
-        )
-        log_event('ERROR', f"Developer {callback.from_user.id} failed to view error logs: {str(e)}")
-    
-    await callback.answer()
+        await callback.message.answer(f"❌ Ошибка при получении логов: {str(e)}")
+        await callback.answer()
 
-# Error status callback
+# Статус ошибок
 @dp.callback_query(F.data == "error_status")
 async def error_status_callback(callback: CallbackQuery):
     if not is_developer(callback.from_user.id):
@@ -2133,44 +2082,18 @@ async def error_status_callback(callback: CallbackQuery):
         stats = cursor.fetchall()
         conn.close()
         
-        if not stats:
-            keyboard = InlineKeyboardBuilder()
-            keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="developer_errors"))
-            await callback.message.edit_text(
-                "❌ Нет статистики ошибок.",
-                reply_markup=keyboard.as_markup(),
-                parse_mode=ParseMode.HTML
-            )
-            await callback.answer()
-            return
-        
         status_text = f"{hbold('📊 Статистика ошибок')}\n\n"
         for level, count in stats:
-            status_text += f"📈 Уровень {level}: {count} ошибок\n"
+            status_text += f"🔹 {level}: {count} ошибок\n"
         
-        keyboard = InlineKeyboardBuilder()
-        keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="developer_errors"))
-        
-        await callback.message.edit_text(
-            status_text,
-            reply_markup=keyboard.as_markup(),
-            parse_mode=ParseMode.HTML
-        )
-        log_event('INFO', f"Developer {callback.from_user.id} viewed error status")
+        await callback.message.answer(status_text, parse_mode=ParseMode.HTML)
+        await callback.answer()
         
     except Exception as e:
-        keyboard = InlineKeyboardBuilder()
-        keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="developer_errors"))
-        await callback.message.edit_text(
-            f"❌ Ошибка при получении статистики: {str(e)}",
-            reply_markup=keyboard.as_markup(),
-            parse_mode=ParseMode.HTML
-        )
-        log_event('ERROR', f"Developer {callback.from_user.id} failed to view error status: {str(e)}")
-    
-    await callback.answer()
+        await callback.message.answer(f"❌ Ошибка при получении статистики: {str(e)}")
+        await callback.answer()
 
-# Download logs callback
+# Скачать логи
 @dp.callback_query(F.data == "download_logs")
 async def download_logs_callback(callback: CallbackQuery):
     if not is_developer(callback.from_user.id):
@@ -2178,46 +2101,14 @@ async def download_logs_callback(callback: CallbackQuery):
         return
     
     try:
-        log_file = "bot_mirrozz.log"
-        if not os.path.exists(log_file):
-            keyboard = InlineKeyboardBuilder()
-            keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="developer_errors"))
-            await callback.message.edit_text(
-                "❌ Файл логов не найден.",
-                reply_markup=keyboard.as_markup(),
-                parse_mode=ParseMode.HTML
-            )
-            await callback.answer()
-            return
-        
-        input_file = FSInputFile(log_file)
-        await callback.message.answer_document(
-            document=input_file,
-            caption="📥 Файл логов"
-        )
-        log_event('INFO', f"Developer {callback.from_user.id} downloaded logs")
-        
-        keyboard = InlineKeyboardBuilder()
-        keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="developer_errors"))
-        await callback.message.edit_text(
-            f"{hbold('🚫 Управление ошибками')}",
-            reply_markup=keyboard.as_markup(),
-            parse_mode=ParseMode.HTML
-        )
-        
+        log_file = FSInputFile('bot_mirrozz.log')
+        await callback.message.answer_document(log_file, caption="📁 Логи бота")
+        await callback.answer()
     except Exception as e:
-        keyboard = InlineKeyboardBuilder()
-        keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="developer_errors"))
-        await callback.message.edit_text(
-            f"❌ Ошибка при скачивании логов: {str(e)}",
-            reply_markup=keyboard.as_markup(),
-            parse_mode=ParseMode.HTML
-        )
-        log_event('ERROR', f"Developer {callback.from_user.id} failed to download logs: {str(e)}")
-    
-    await callback.answer()
+        await callback.message.answer(f"❌ Ошибка при скачивании логов: {str(e)}")
+        await callback.answer()
 
-# Clear logs callback
+# Очистить логи
 @dp.callback_query(F.data == "clear_logs")
 async def clear_logs_callback(callback: CallbackQuery):
     if not is_developer(callback.from_user.id):
@@ -2229,11 +2120,35 @@ async def clear_logs_callback(callback: CallbackQuery):
     keyboard.add(InlineKeyboardButton(text="❌ Нет", callback_data="developer_errors"))
     
     await callback.message.edit_text(
-        "⚠️ Вы уверены, что хотите очистить все логи? Это действие необратимо!",
-        reply_markup=keyboard.as_markup(),
-        parse_mode=ParseMode.HTML
+        "⚠️ Вы уверены, что хотите очистить все логи?",
+        reply_markup=keyboard.as_markup()
     )
     await callback.answer()
+
+@dp.callback_query(F.data == "confirm_clear_logs")
+async def confirm_clear_logs_callback(callback: CallbackQuery):
+    if not is_developer(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа.")
+        return
+    
+    try:
+        # Очистка логов в базе данных
+        conn = sqlite3.connect('bot_mirrozz_database.db')
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM logs')
+        conn.commit()
+        conn.close()
+        
+        # Очистка файла логов
+        with open('bot_mirrozz.log', 'w') as f:
+            f.write('')
+        
+        await callback.message.answer("✅ Логи успешно очищены.")
+        await callback.answer()
+        
+    except Exception as e:
+        await callback.message.answer(f"❌ Ошибка при очистке логов: {str(e)}")
+        await callback.answer()
 
 # Confirm clear logs callback
 @dp.callback_query(F.data == "confirm_clear_logs")
