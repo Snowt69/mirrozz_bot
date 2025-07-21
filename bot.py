@@ -209,7 +209,24 @@ async def check_subgram_subscription(
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(SUBGRAM_API_URL, headers=headers, json=data) as response:
-                return await response.json()
+                result = await response.json()
+                
+                # Дополнительная проверка статусов подписок
+                if result.get('status') == 'ok':
+                    return result
+                
+                if 'additional' in result and 'sponsors' in result['additional']:
+                    all_subscribed = True
+                    for sponsor in result['additional']['sponsors']:
+                        if sponsor['status'] != 'subscribed':
+                            all_subscribed = False
+                            break
+                    
+                    if all_subscribed:
+                        result['status'] = 'ok'
+                        result['message'] = 'Все подписки оформлены'
+                
+                return result
     except Exception as e:
         logger.error(f"SubGram API error: {str(e)}")
         return {"status": "error", "code": 500, "message": "Ошибка соединения с SubGram"}
@@ -315,53 +332,77 @@ async def check_subscription(user_id: int, check_type: int = 1) -> bool:
 
 @dp.callback_query(F.data == "subgram_check")
 async def subgram_check_callback(callback: CallbackQuery):
-    # Меняем текст кнопки на "Проверяю статус подписки..."
-    await callback.message.edit_text("Проверяю статус подписки...")
-    
-    # Проверяем подписки
-    subgram_response = await check_subgram_subscription(
-        user_id=callback.from_user.id,
-        chat_id=callback.message.chat.id,
-        first_name=callback.from_user.first_name,
-        language_code=callback.from_user.language_code,
-        premium=callback.from_user.is_premium
-    )
-    
-    if subgram_response.get('status') == 'ok':
-        # Удаляем сообщение с каналами
-        await callback.message.delete()
+    try:
+        # Меняем текст кнопки на "Проверяю статус подписки..."
+        await callback.message.edit_text("Проверяю статус подписки...")
         
-        # Отправляем сообщение об успешной проверке
-        msg = await callback.message.answer("Вы подписались на все каналы! Теперь можете пользоваться функционалом бота.")
+        # Проверяем подписки
+        subgram_response = await check_subgram_subscription(
+            user_id=callback.from_user.id,
+            chat_id=callback.message.chat.id,
+            first_name=callback.from_user.first_name,
+            language_code=callback.from_user.language_code,
+            premium=callback.from_user.is_premium
+        )
         
-        # Удаляем сообщение через 3 секунды
-        await asyncio.sleep(3)
-        await msg.delete()
-        
-        # Продолжаем выполнение команды, которую хотел пользователь
-        await cmd_start(Message(
-            chat=callback.message.chat,
-            from_user=callback.from_user,
-            text="/start"
-        ))
-    else:
-        # Обновляем сообщение с новыми каналами
-        keyboard = InlineKeyboardBuilder()
-        keyboard.add(InlineKeyboardButton(text="✅ Я подписался", callback_data="subgram_check"))
-        
-        channels_text = "📢 Подпишитесь на каналы:\n\n"
-        if 'links' in subgram_response:
-            for link in subgram_response['links']:
-                channels_text += f"• {link}\n"
-        elif 'additional' in subgram_response and 'sponsors' in subgram_response['additional']:
-            for sponsor in subgram_response['additional']['sponsors']:
-                if sponsor['status'] != 'subscribed':
-                    channels_text += f"• {sponsor['link']} - {sponsor['resource_name'] or 'Канал'}\n"
-        
-        channels_text += "\nПосле подписки нажмите кнопку ниже"
-        
-        await callback.message.edit_text(channels_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
-        await callback.answer("Пожалуйста, подпишитесь на все каналы")
+        if subgram_response.get('status') == 'ok':
+            # Удаляем сообщение с каналами
+            await callback.message.delete()
+            
+            # Отправляем сообщение об успешной проверке
+            msg = await callback.message.answer("Вы подписались на все каналы! Теперь можете пользоваться функционалом бота.")
+            
+            # Удаляем сообщение через 3 секунды
+            await asyncio.sleep(3)
+            await msg.delete()
+            
+            # Продолжаем выполнение команды, которую хотел пользователь
+            await bot.send_message(
+                chat_id=callback.message.chat.id,
+                text="/start",
+                from_user=callback.from_user
+            )
+        else:
+            # Проверяем, есть ли неподписанные каналы
+            unsubscribed = False
+            if 'additional' in subgram_response and 'sponsors' in subgram_response['additional']:
+                for sponsor in subgram_response['additional']['sponsors']:
+                    if sponsor['status'] != 'subscribed':
+                        unsubscribed = True
+                        break
+            
+            if not unsubscribed and 'links' not in subgram_response:
+                # Если все подписки есть, но API почему-то не вернул статус 'ok'
+                await callback.message.delete()
+                msg = await callback.message.answer("Вы подписались на все каналы! Теперь можете пользоваться функционалом бота.")
+                await asyncio.sleep(3)
+                await msg.delete()
+                await bot.send_message(
+                    chat_id=callback.message.chat.id,
+                    text="/start",
+                    from_user=callback.from_user
+                )
+            else:
+                # Обновляем сообщение с новыми каналами
+                keyboard = InlineKeyboardBuilder()
+                keyboard.add(InlineKeyboardButton(text="✅ Я подписался", callback_data="subgram_check"))
+                
+                channels_text = "📢 Подпишитесь на каналы:\n\n"
+                if 'links' in subgram_response:
+                    for link in subgram_response['links']:
+                        channels_text += f"• {link}\n"
+                elif 'additional' in subgram_response and 'sponsors' in subgram_response['additional']:
+                    for sponsor in subgram_response['additional']['sponsors']:
+                        if sponsor['status'] != 'subscribed':
+                            channels_text += f"• {sponsor['link']} - {sponsor['resource_name'] or 'Канал'}\n"
+                
+                channels_text += "\nПосле подписки нажмите кнопку ниже"
+                
+                await callback.message.edit_text(channels_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
+                await callback.answer("Пожалуйста, подпишитесь на все каналы")
+    except Exception as e:
+        log_event('ERROR', f"Error in subgram_check_callback: {str(e)}")
+        await callback.answer("❌ Произошла ошибка при проверке подписки")
 
 @dp.callback_query(F.data.startswith("subgram_check_"))
 async def subgram_check_with_message_callback(callback: CallbackQuery):
@@ -2732,13 +2773,12 @@ async def restart_bot_callback(callback: CallbackQuery):
     # Simulate restart (actual implementation depends on hosting environment)
     os._exit(0)
 
-# Error handler
 @dp.errors()
 async def error_handler(update: types.Update, exception: Exception):
-    log_event('ERROR', f"Update {update.update_id} caused error: {str(exception)}")
-    if update.message:
+    log_event('ERROR', f"Update {update.update_id if update else 'None'} caused error: {str(exception)}")
+    if update and update.message:
         await update.message.answer("❌ Произошла ошибка. Пожалуйста, попробуйте позже.")
-    elif update.callback_query:
+    elif update and update.callback_query:
         await update.callback_query.answer("❌ Произошла ошибка.")
     return True
 
