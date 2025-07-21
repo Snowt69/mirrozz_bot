@@ -2019,8 +2019,8 @@ async def developer_errors_callback(callback: CallbackQuery):
         return
     
     keyboard = InlineKeyboardBuilder()
-    keyboard.add(InlineKeyboardButton(text="📜 Список ошибок", callback_data="list_errors"))
-    keyboard.add(InlineKeyboardButton(text="📊 Статус", callback_data="error_status"))
+    keyboard.add(InlineKeyboardButton(text="📊 Подробная статистика", callback_data="error_status"))
+    keyboard.add(InlineKeyboardButton(text="📜 Последние ошибки", callback_data="list_errors"))
     keyboard.add(InlineKeyboardButton(text="📥 Скачать логи", callback_data="download_logs"))
     keyboard.add(InlineKeyboardButton(text="🗑 Очистить логи", callback_data="clear_logs"))
     keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="admin_developer"))
@@ -2028,7 +2028,7 @@ async def developer_errors_callback(callback: CallbackQuery):
     keyboard.adjust(1)
     
     await callback.message.edit_text(
-        f"{hbold('🚫 Управление ошибками')}",
+        f"{hbold('🚫 Управление ошибками и логами')}\n\nПросмотр статистики ошибок и управление логами бота",
         reply_markup=keyboard.as_markup(),
         parse_mode=ParseMode.HTML
     )
@@ -2068,7 +2068,6 @@ async def list_errors_callback(callback: CallbackQuery):
         await callback.message.answer(f"❌ Ошибка при получении логов: {str(e)}")
         await callback.answer()
 
-# Статус ошибок
 @dp.callback_query(F.data == "error_status")
 async def error_status_callback(callback: CallbackQuery):
     if not is_developer(callback.from_user.id):
@@ -2076,22 +2075,57 @@ async def error_status_callback(callback: CallbackQuery):
         return
     
     try:
+        # Получаем статистику ошибок из базы данных
         conn = sqlite3.connect('bot_mirrozz_database.db')
         cursor = conn.cursor()
+        
+        # Общее количество ошибок
+        cursor.execute('SELECT COUNT(*) FROM logs')
+        total_errors = cursor.fetchone()[0]
+        
+        # Количество ошибок по уровням
         cursor.execute('SELECT level, COUNT(*) FROM logs GROUP BY level')
-        stats = cursor.fetchall()
+        levels_stats = cursor.fetchall()
+        
+        # Последние 5 критических ошибок
+        cursor.execute('SELECT message, log_date FROM logs WHERE level = "error" ORDER BY log_date DESC LIMIT 5')
+        recent_errors = cursor.fetchall()
+        
         conn.close()
         
-        status_text = f"{hbold('📊 Статистика ошибок')}\n\n"
-        for level, count in stats:
-            status_text += f"🔹 {level}: {count} ошибок\n"
+        # Получаем информацию о файле логов
+        log_file_size = 0
+        if os.path.exists('bot_mirrozz.log'):
+            log_file_size = os.path.getsize('bot_mirrozz.log') / 1024  # Размер в KB
         
-        await callback.message.answer(status_text, parse_mode=ParseMode.HTML)
-        await callback.answer()
+        # Формируем текст сообщения
+        status_text = f"""
+{hbold('📊 Подробная статистика ошибок')}
+
+{hbold('🔢 Общее количество ошибок')}: {total_errors}
+{hbold('📁 Размер файла логов')}: {log_file_size:.2f} KB
+
+{hbold('📈 Распределение по уровням')}:
+"""
+        
+        # Добавляем статистику по уровням
+        for level, count in levels_stats:
+            status_text += f"• {level.upper()}: {count} ошибок\n"
+        
+        # Добавляем последние критические ошибки
+        if recent_errors:
+            status_text += f"\n{hbold('⚠️ Последние 5 критических ошибок')}:\n"
+            for error, date in recent_errors:
+                status_text += f"• {date}: {error[:50]}...\n"
+        
+        await callback.message.edit_text(status_text, parse_mode=ParseMode.HTML)
+        log_event('INFO', f"Developer {callback.from_user.id} viewed detailed error stats")
         
     except Exception as e:
-        await callback.message.answer(f"❌ Ошибка при получении статистики: {str(e)}")
-        await callback.answer()
+        await callback.message.edit_text(f"❌ Ошибка при получении статистики: {str(e)}")
+        log_event('ERROR', f"Failed to get error stats: {str(e)}")
+    
+    await callback.answer()
 
 # Скачать логи
 @dp.callback_query(F.data == "download_logs")
