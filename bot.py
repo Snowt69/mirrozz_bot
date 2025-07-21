@@ -375,20 +375,120 @@ async def subgram_check_callback(callback: CallbackQuery):
             keyboard = InlineKeyboardBuilder()
             keyboard.add(InlineKeyboardButton(text="✅ Я выполнил", callback_data="subgram_check"))
             
-            channels_text = "📢 Проверка подписки\n\n"
+            channels_text = """📢 Проверка подписки
+
+Подпишитесь на каналы выше, затем нажмите на кнопку "Я выполнил" ✅
+
+После этого нажмите сюда ⬇
+"""
             if 'links' in subgram_response:
                 for link in subgram_response['links']:
-                    channels_text += f"• {link}\n"
+                    channels_text += f"\n• {link}"
             elif 'additional' in subgram_response and 'sponsors' in subgram_response['additional']:
                 for sponsor in subgram_response['additional']['sponsors']:
-                    channels_text += f"• {sponsor['link']} - {sponsor['resource_name'] or 'Канал'}\n"
-            
-            channels_text += "\nПодпишитесь на каналы выше, затем нажмите на кнопку \"Я выполнил\" ✅\n\nПосле этого нажмите сюда ⬇"
+                    if sponsor['status'] != 'subscribed':
+                        channels_text += f"\n• {sponsor['link']} - {sponsor['resource_name'] or 'Канал'}"
             
             await callback.message.edit_text(channels_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
             await callback.answer("Пожалуйста, подпишитесь на все каналы")
     except Exception as e:
         log_event('ERROR', f"Error in subgram_check_callback: {str(e)}")
+        await callback.answer("❌ Произошла ошибка при проверке подписки")
+
+@dp.callback_query(F.data.startswith("subgram_check_"))
+async def subgram_check_with_message_callback(callback: CallbackQuery):
+    message_id = callback.data.split('_')[2]
+    user_id = callback.from_user.id
+    current_time = time.time()
+    
+    try:
+        # Проверяем, была ли успешная проверка подписки в последний час
+        if user_id in LAST_SUBSCRIPTION_CHECK and (current_time - LAST_SUBSCRIPTION_CHECK[user_id]) < 3600:
+            await callback.message.delete()
+            return
+            
+        # Меняем текст кнопки на "Проверяю статус подписки..."
+        await callback.message.edit_text("Проверяю статус подписки...")
+        
+        # Проверяем подписки
+        subgram_response = await check_subgram_subscription(
+            user_id=user_id,
+            chat_id=callback.message.chat.id,
+            first_name=callback.from_user.first_name,
+            language_code=callback.from_user.language_code,
+            premium=callback.from_user.is_premium
+        )
+        
+        if subgram_response.get('status') == 'ok':
+            # Сохраняем время успешной проверки
+            LAST_SUBSCRIPTION_CHECK[user_id] = current_time
+            
+            # Удаляем сообщение с каналами
+            await callback.message.delete()
+            
+            # Отправляем временное сообщение об успешной проверке
+            msg = await callback.message.answer("✅ Вы успешно прошли проверку подписки!")
+            
+            # Удаляем сообщение через 3 секунды
+            await asyncio.sleep(3)
+            await msg.delete()
+            
+            # Получаем оригинальное сообщение и обрабатываем его
+            try:
+                original_message = await bot.get_message(callback.message.chat.id, message_id)
+                if original_message.text.startswith('/start'):
+                    # Если это была команда /start с ссылкой, обрабатываем ссылку
+                    link_id = original_message.text.split()[1]
+                    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+                    cursor = conn.cursor()
+                    cursor.execute('SELECT * FROM links WHERE link_id = ?', (link_id,))
+                    link = cursor.fetchone()
+                    
+                    if link:
+                        cursor.execute('UPDATE links SET visits = visits + 1 WHERE link_id = ?', (link_id,))
+                        cursor.execute('UPDATE users SET link_visits = link_visits + 1 WHERE user_id = ?', (user_id,))
+                        conn.commit()
+                        
+                        content_type = link[1]
+                        content_text = link[2]
+                        content_file_id = link[3]
+                        
+                        if content_type == 'text':
+                            await original_message.answer(content_text)
+                        elif content_type == 'photo':
+                            await original_message.answer_photo(content_file_id, caption=content_text)
+                        elif content_type == 'document':
+                            await original_message.answer_document(content_file_id, caption=content_text)
+                        
+                        conn.close()
+                else:
+                    # Если это была другая команда (/help, /user_stats и т.д.), просто выполняем её
+                    await original_message.answer(original_message.text)
+            except:
+                pass
+        else:
+            # Обновляем сообщение с новыми каналами
+            keyboard = InlineKeyboardBuilder()
+            keyboard.add(InlineKeyboardButton(text="✅ Я выполнил", callback_data=f"subgram_check_{message_id}"))
+            
+            channels_text = """📢 Проверка подписки
+
+Подпишитесь на каналы выше, затем нажмите на кнопку "Я выполнил" ✅
+
+После этого нажмите сюда ⬇
+"""
+            if 'links' in subgram_response:
+                for link in subgram_response['links']:
+                    channels_text += f"\n• {link}"
+            elif 'additional' in subgram_response and 'sponsors' in subgram_response['additional']:
+                for sponsor in subgram_response['additional']['sponsors']:
+                    if sponsor['status'] != 'subscribed':
+                        channels_text += f"\n• {sponsor['link']} - {sponsor['resource_name'] or 'Канал'}"
+            
+            await callback.message.edit_text(channels_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
+            await callback.answer("Пожалуйста, подпишитесь на все каналы")
+    except Exception as e:
+        log_event('ERROR', f"Error in subgram_check_with_message_callback: {str(e)}")
         await callback.answer("❌ Произошла ошибка при проверке подписки")
 
 @dp.callback_query(F.data.startswith("subgram_check_"))
@@ -537,7 +637,7 @@ async def cmd_start(message: Message):
                 keyboard = InlineKeyboardBuilder()
                 keyboard.add(InlineKeyboardButton(text="✅ Я выполнил", callback_data=f"subgram_check_{message.message_id}"))
                 
-                channels_text = "📢 Подпишитесь на каналы:\n\n"
+                channels_text = "📢 Проверка подписки\n\n"
                 if 'links' in subgram_response:
                     for link in subgram_response['links']:
                         channels_text += f"• {link}\n"
@@ -545,7 +645,7 @@ async def cmd_start(message: Message):
                     for sponsor in subgram_response['additional']['sponsors']:
                         channels_text += f"• {sponsor['link']} - {sponsor['resource_name'] or 'Канал'}\n"
                 
-                channels_text += "\nПосле подписки нажмите кнопку ниже"
+                channels_text += "\nПодпишитесь на каналы выше, затем нажмите на кнопку 'Я выполнил' ✅                               После этого нажмите сюда ⬇"
                 
                 await message.answer(channels_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
                 return
