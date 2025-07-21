@@ -2012,6 +2012,36 @@ async def message_history_callback(callback: CallbackQuery):
     await callback.answer()
     log_event('INFO', f"Developer {callback.from_user.id} viewed message history")
 
+# Developer logs callback
+@dp.callback_query(F.data == "developer_logs")
+async def developer_logs_callback(callback: CallbackQuery):
+    if not is_developer(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа.")
+        return
+    
+    conn = sqlite3.connect('bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT log_id, level, message, log_date FROM logs ORDER BY log_date DESC LIMIT 10')
+    logs = cursor.fetchall()
+    conn.close()
+    
+    if not logs:
+        await callback.message.answer("❌ Нет логов.")
+        await callback.answer()
+        return
+    
+    logs_text = f"{hbold('🚫 Последние 10 логов')}\n\n"
+    for log in logs:
+        log_id, level, message, log_date = log
+        logs_text += f"🆔 ID лога: {log_id}\n"
+        logs_text += f"📊 Уровень: {level}\n"
+        logs_text += f"📅 Дата: {log_date}\n"
+        logs_text += f"📝 Сообщение: {message[:50]}...\n\n"
+    
+    await callback.message.answer(logs_text, parse_mode=ParseMode.HTML)
+    await callback.answer()
+    log_event('INFO', f"Developer {callback.from_user.id} viewed logs")
+
 @dp.callback_query(F.data == "developer_errors")
 async def developer_errors_callback(callback: CallbackQuery):
     if not is_developer(callback.from_user.id):
