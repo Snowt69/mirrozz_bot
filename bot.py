@@ -371,39 +371,22 @@ async def subgram_check_callback(callback: CallbackQuery):
             await msg.delete()
             
         else:
-            # Проверяем, есть ли неподписанные каналы
-            unsubscribed = False
-            if 'additional' in subgram_response and 'sponsors' in subgram_response['additional']:
-                for sponsor in subgram_response['additional']['sponsors']:
-                    if sponsor['status'] != 'subscribed':
-                        unsubscribed = True
-                        break
+            # Обновляем сообщение с новыми каналами
+            keyboard = InlineKeyboardBuilder()
+            keyboard.add(InlineKeyboardButton(text="✅ Я выполнил", callback_data="subgram_check"))
             
-            if not unsubscribed and 'links' not in subgram_response:
-                # Если все подписки есть, но API почему-то не вернул статус 'ok'
-                LAST_SUBSCRIPTION_CHECK[user_id] = current_time
-                await callback.message.delete()
-                msg = await callback.message.answer("✅ Вы успешно прошли проверку подписки!")
-                await asyncio.sleep(3)
-                await msg.delete()
-            else:
-                # Обновляем сообщение с новыми каналами
-                keyboard = InlineKeyboardBuilder()
-                keyboard.add(InlineKeyboardButton(text="✅ Я подписался", callback_data="subgram_check"))
-                
-                channels_text = "📢 Подпишитесь на каналы:\n\n"
-                if 'links' in subgram_response:
-                    for link in subgram_response['links']:
-                        channels_text += f"• {link}\n"
-                elif 'additional' in subgram_response and 'sponsors' in subgram_response['additional']:
-                    for sponsor in subgram_response['additional']['sponsors']:
-                        if sponsor['status'] != 'subscribed':
-                            channels_text += f"• {sponsor['link']} - {sponsor['resource_name'] or 'Канал'}\n"
-                
-                channels_text += "\nСначала нажмите на кнопку 'Я выполнил', затем нажмите на кнопку ниже. "
-                
-                await callback.message.edit_text(channels_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
-                await callback.answer("Пожалуйста, подпишитесь на все каналы")
+            channels_text = "📢 Проверка подписки\n\n"
+            if 'links' in subgram_response:
+                for link in subgram_response['links']:
+                    channels_text += f"• {link}\n"
+            elif 'additional' in subgram_response and 'sponsors' in subgram_response['additional']:
+                for sponsor in subgram_response['additional']['sponsors']:
+                    channels_text += f"• {sponsor['link']} - {sponsor['resource_name'] or 'Канал'}\n"
+            
+            channels_text += "\nПодпишитесь на каналы выше, затем нажмите на кнопку \"Я выполнил\" ✅\n\nПосле этого нажмите сюда ⬇"
+            
+            await callback.message.edit_text(channels_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
+            await callback.answer("Пожалуйста, подпишитесь на все каналы")
     except Exception as e:
         log_event('ERROR', f"Error in subgram_check_callback: {str(e)}")
         await callback.answer("❌ Произошла ошибка при проверке подписки")
@@ -418,13 +401,6 @@ async def subgram_check_with_message_callback(callback: CallbackQuery):
         # Проверяем, была ли успешная проверка подписки в последний час
         if user_id in LAST_SUBSCRIPTION_CHECK and (current_time - LAST_SUBSCRIPTION_CHECK[user_id]) < 3600:
             await callback.message.delete()
-            
-            # Получаем оригинальное сообщение и обрабатываем его
-            try:
-                original_message = await bot.get_message(callback.message.chat.id, message_id)
-                await original_message.answer(original_message.text)
-            except:
-                pass
             return
             
         # Меняем текст кнопки на "Проверяю статус подписки..."
@@ -453,27 +429,53 @@ async def subgram_check_with_message_callback(callback: CallbackQuery):
             await asyncio.sleep(3)
             await msg.delete()
             
-            # Продолжаем выполнение команды, которую хотел пользователь
+            # Получаем оригинальное сообщение и обрабатываем его
             try:
                 original_message = await bot.get_message(callback.message.chat.id, message_id)
-                await original_message.answer(original_message.text)
+                if original_message.text.startswith('/start'):
+                    # Если это была команда /start с ссылкой, обрабатываем ссылку
+                    link_id = original_message.text.split()[1]
+                    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+                    cursor = conn.cursor()
+                    cursor.execute('SELECT * FROM links WHERE link_id = ?', (link_id,))
+                    link = cursor.fetchone()
+                    
+                    if link:
+                        cursor.execute('UPDATE links SET visits = visits + 1 WHERE link_id = ?', (link_id,))
+                        cursor.execute('UPDATE users SET link_visits = link_visits + 1 WHERE user_id = ?', (user_id,))
+                        conn.commit()
+                        
+                        content_type = link[1]
+                        content_text = link[2]
+                        content_file_id = link[3]
+                        
+                        if content_type == 'text':
+                            await original_message.answer(content_text)
+                        elif content_type == 'photo':
+                            await original_message.answer_photo(content_file_id, caption=content_text)
+                        elif content_type == 'document':
+                            await original_message.answer_document(content_file_id, caption=content_text)
+                        
+                        conn.close()
+                else:
+                    # Если это была другая команда (/help, /user_stats и т.д.), просто выполняем её
+                    await original_message.answer(original_message.text)
             except:
                 pass
         else:
             # Обновляем сообщение с новыми каналами
             keyboard = InlineKeyboardBuilder()
-            keyboard.add(InlineKeyboardButton(text="✅ Я подписался", callback_data=f"subgram_check_{message_id}"))
+            keyboard.add(InlineKeyboardButton(text="✅ Я выполнил", callback_data=f"subgram_check_{message_id}"))
             
-            channels_text = "📢 Подпишитесь на каналы:\n\n"
+            channels_text = "📢 Проверка подписки\n\n"
             if 'links' in subgram_response:
                 for link in subgram_response['links']:
                     channels_text += f"• {link}\n"
             elif 'additional' in subgram_response and 'sponsors' in subgram_response['additional']:
                 for sponsor in subgram_response['additional']['sponsors']:
-                    if sponsor['status'] != 'subscribed':
-                        channels_text += f"• {sponsor['link']} - {sponsor['resource_name'] or 'Канал'}\n"
+                    channels_text += f"• {sponsor['link']} - {sponsor['resource_name'] or 'Канал'}\n"
             
-            channels_text += "\nПосле подписки нажмите кнопку ниже"
+            channels_text += "\nПодпишитесь на каналы выше, затем нажмите на кнопку \"Я выполнил\" ✅\n\nПосле этого нажмите сюда ⬇"
             
             await callback.message.edit_text(channels_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
             await callback.answer("Пожалуйста, подпишитесь на все каналы")
@@ -545,38 +547,10 @@ async def cmd_start(message: Message):
                 
                 channels_text += "\nПосле подписки нажмите кнопку ниже"
                 
-                # Сохраняем message_id для последующего удаления
-                msg = await message.answer(channels_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
-                
-                # Второе сообщение с дополнительными каналами
-                await message.answer("📢 Подпишитесь на дополнительные каналы")
+                await message.answer(channels_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
                 return
     
-    # Если подписки проверены или нет аргумента, продолжаем обычную работу
-    welcome_text = f"""
-👋 Привет, {hbold(user.first_name)}!
-
-Я Mirrozz Scripts — бот, который выдает актуальные скрипты и инжекторы для Roblox по ссылке! 🚀
-
-{hbold('Почему я лучший?')}
-• {hbold('Актуальные скрипты')} — база обновляется регулярно!
-• {hbold('Мгновенный доступ')} — получай скрипты в пару кликов!
-• {hbold('Надежное хранение')} — твои скрипты всегда под рукой!
-• {hbold('Стабильная работа')} — бот на мощном сервере, без сбоев!
-"""
-    if is_admin(user.id):
-        welcome_text += f"\n{hbold('👑 Вы администратор бота!')}\nДоступ к админ-панели: /admin"
-    if is_developer(user.id):
-        welcome_text += f"\n{hbold('💻 Вы разработчик бота!')}\nДоступ к панели разработчика: /admin"
-    
-    welcome_text += "\n\nНапиши /help, чтобы узнать все команды!"
-    
-    await message.answer(welcome_text, parse_mode=ParseMode.HTML)
-    log_event('INFO', f"User {user.id} started the bot")
-    
-    # Если есть аргумент, обрабатываем ссылку
-    if len(start_args) > 1:
-        link_id = start_args[1]
+        # Если подписки проверены, обрабатываем ссылку
         conn = sqlite3.connect('/root/bot_mirrozz_database.db')
         cursor = conn.cursor()
         cursor.execute('SELECT * FROM links WHERE link_id = ?', (link_id,))
@@ -600,6 +574,29 @@ async def cmd_start(message: Message):
             
             conn.close()
             log_event('INFO', f"User {message.from_user.id} accessed link {link_id}")
+            return  # Выходим, чтобы не показывать приветствие
+    
+    # Если нет аргумента или ссылка не найдена, показываем приветствие
+    welcome_text = f"""
+👋 Привет, {hbold(user.first_name)}!
+
+Я Mirrozz Scripts — бот, который выдает актуальные скрипты и инжекторы для Roblox по ссылке! 🚀
+
+{hbold('Почему я лучший?')}
+• {hbold('Актуальные скрипты')} — база обновляется регулярно!
+• {hbold('Мгновенный доступ')} — получай скрипты в пару кликов!
+• {hbold('Надежное хранение')} — твои скрипты всегда под рукой!
+• {hbold('Стабильная работа')} — бот на мощном сервере, без сбоев!
+"""
+    if is_admin(user.id):
+        welcome_text += f"\n{hbold('👑 Вы администратор бота!')}\nДоступ к админ-панели: /admin"
+    if is_developer(user.id):
+        welcome_text += f"\n{hbold('💻 Вы разработчик бота!')}\nДоступ к панели разработчика: /admin"
+    
+    welcome_text += "\n\nНапиши /help, чтобы узнать все команды!"
+    
+    await message.answer(welcome_text, parse_mode=ParseMode.HTML)
+    log_event('INFO', f"User {user.id} started the bot")
 
 # Help command handler
 @dp.message(Command('help'))
