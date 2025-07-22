@@ -343,27 +343,55 @@ def is_banned(user_id: int) -> bool:
     
     return result and result[0] == 1
 
-async def check_subscription(user_id: int, check_type: int = 1) -> bool:
-    try:
-        conn = sqlite3.connect('/root/bot_mirrozz_database.db')
-        cursor = conn.cursor()
-        cursor.execute('SELECT channel_id FROM advertise_channels WHERE check_type = ?', (check_type,))
-        channels = cursor.fetchall()
-        conn.close()
+@dp.callback_query(F.data.startswith("check_sub_"))
+async def check_subscription(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    link_id = data.get('link_id')
+    message_id = data.get('check_message_id')
+    
+    # Меняем сообщение на "Проверяю..."
+    await callback.message.edit_text("Проверяю статус подписки...")
+    
+    # Проверяем подписку
+    subgram_response = await check_subgram_subscription(
+        user_id=callback.from_user.id,
+        chat_id=callback.message.chat.id,
+        first_name=callback.from_user.first_name,
+        language_code=callback.from_user.language_code
+    )
+    
+    if subgram_response.get('status') == 'ok':
+        # Успешная проверка
+        LAST_SUBSCRIPTION_CHECK[callback.from_user.id] = time.time()
         
-        for channel in channels:
-            channel_id = channel[0]
-            try:
-                member = await bot.get_chat_member(channel_id, user_id)
-                if member.status not in ['member', 'administrator', 'creator']:
-                    return False
-            except Exception as e:
-                logger.error(f"Error checking subscription for user {user_id} in channel {channel_id}: {str(e)}")
-                return False
-        return True
-    except Exception as e:
-        logger.error(f"Database error in check_subscription: {str(e)}")
-        return False
+        # Меняем на успешное сообщение
+        await callback.message.edit_text("✅ Вы успешно прошли проверку подписки!")
+        await asyncio.sleep(2)
+        
+        # Удаляем сообщение с проверкой
+        await callback.message.delete()
+        
+        # Отправляем контент ссылки
+        await process_link(link_id, callback.message, callback.from_user.id)
+    else:
+        # Не подписан - показываем каналы снова
+        keyboard = InlineKeyboardBuilder()
+        keyboard.add(InlineKeyboardButton(
+            text="✅ Я подписался", 
+            callback_data=f"check_sub_{link_id}"
+        ))
+        
+        channels_text = "📢 Подпишитесь на каналы:\n\n"
+        if 'links' in subgram_response:
+            for link in subgram_response['links']:
+                channels_text += f"• {link}\n"
+        
+        await callback.message.edit_text(
+            channels_text,
+            reply_markup=keyboard.as_markup()
+        )
+    
+    await callback.answer()
 
 # Добавим глобальную переменную для хранения времени последней успешной проверки
 LAST_SUBSCRIPTION_CHECK = {}
@@ -529,83 +557,101 @@ async def subgram_check_with_message_callback(callback: CallbackQuery):
         await callback.answer("❌ Произошла ошибка при проверке подписки")
 
 @dp.message(CommandStart())
-async def cmd_start(message: Message):
+async def cmd_start(message: Message, state: FSMContext):
     start_args = message.text.split()
-    
-    # Проверяем, забанен ли пользователь
-    if is_banned(message.from_user.id):
-        await message.answer("❌ Вы заблокированы в этом боте.")
-        return
-    
-    # Обновляем статистику пользователя
     user = message.from_user
+    
+    if is_banned(user.id):
+        return await message.answer("❌ Вы заблокированы в этом боте.")
+    
     update_user_visit(user.id, user.username, user.first_name, user.last_name)
     
-    # Если есть аргумент (ссылка), сначала проверяем подписку на дополнительные каналы
+    # Если есть ссылка - сначала проверка подписки
     if len(start_args) > 1:
         link_id = start_args[1]
+        await state.update_data(link_id=link_id)
         
-        user_id = message.from_user.id
-        current_time = time.time()
+        # Сообщение с кнопкой проверки
+        keyboard = InlineKeyboardBuilder()
+        keyboard.add(InlineKeyboardButton(
+            text="✅ Я подписался", 
+            callback_data="verify_subscription"
+        ))
         
-        # Проверяем, была ли успешная проверка подписки в последний час
-        if user_id in LAST_SUBSCRIPTION_CHECK and (current_time - LAST_SUBSCRIPTION_CHECK[user_id]) < 3600:
-            # Пропускаем проверку подписки
-            await process_link(link_id, message, user_id)
-            return
-            
-        # Проверяем подписки через SubGram
-        subgram_response = await check_subgram_subscription(
-            user_id=user_id,
-            chat_id=message.chat.id,
-            first_name=message.from_user.first_name,
-            language_code=message.from_user.language_code,
-            premium=message.from_user.is_premium
+        await message.answer(
+            "📢 Проверка подписки\n\n"
+            "Подпишитесь на каналы выше, затем нажмите кнопку ниже ✅\n"
+            "После этого нажмите сюда ⬇",
+            reply_markup=keyboard.as_markup()
         )
-        
-        if subgram_response.get('status') == 'ok':
-            LAST_SUBSCRIPTION_CHECK[user_id] = current_time
-            await process_link(link_id, message, user_id)
-            return
-        else:
-            # Показываем сообщение с каналами для подписки
-            keyboard = InlineKeyboardBuilder()
-            keyboard.add(InlineKeyboardButton(text="✅ Я выполнил", callback_data="subgram_check"))
-            
-            channels_text = "📢 Проверка подписки\n\n"
-            if 'links' in subgram_response:
-                for link in subgram_response['links']:
-                    channels_text += f"• {link}\n"
-            elif 'additional' in subgram_response and 'sponsors' in subgram_response['additional']:
-                for sponsor in subgram_response['additional']['sponsors']:
-                    channels_text += f"• {sponsor['link']} - {sponsor['resource_name'] or 'Канал'}\n"
-            
-            channels_text += "\nПодпишитесь на каналы выше, затем нажмите на кнопку \"Я выполнил\" ✅\n\nПосле этого нажмите сюда ⬇"
-            
-            await message.answer(channels_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
-            return
+    else:
+        # Если нет ссылки - сразу приветствие
+        await show_welcome(message)
+
+async def show_welcome(message: Message):
+    user = message.from_user
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM users')
+    user_count = cursor.fetchone()[0]
+    conn.close()
     
-    # Полное приветственное сообщение как на скриншоте
-    welcome_text = f"""
-👋 Привет, {hbold(user.first_name)}!
-
-Я Mirrozz Scripts — бот, который выдает актуальные скрипты и инжекторы для Roblox по ссылке! 🚀
-
-{hbold('Почему я лучший?')}
-• {hbold('Актуальные скрипты')} — база обновляется регулярно!
-• {hbold('Мгновенный доступ')} — получай скрипты в пару кликов!
-• {hbold('Надежное хранение')} — твои скрипты всегда под рукой!
-• {hbold('Стабильная работа')} — бот на мощном сервере, без сбоев!
-"""
+    welcome_text = (
+        f"Я Mirrozz Scripts — бот, который выдает актуальные скрипты и инжекторы для Roblox по ссылке!\n\n"
+        f"Почему я лучший?\n\n"
+        f"- Актуальные скрипты — база обновляется регулярно!\n"
+        f"- Мгновенный доступ — получай скрипты в пару кликов!\n"
+        f"- Надежное хранение — твои скрипты всегда под рукой!\n"
+        f"- Стабильная работа — бот на мощном сервере, без сбоев!\n\n"
+    )
+    
     if is_admin(user.id):
-        welcome_text += f"\n{hbold('👑 Вы администратор бота!')}\nДоступ к админ-панели: /admin"
+        welcome_text += "✔️ Вы администратор бота!\nДоступ к админ-панели: /admin\n"
     if is_developer(user.id):
-        welcome_text += f"\n{hbold('💻 Вы разработчик бота!')}\nДоступ к панели разработчика: /admin"
+        welcome_text += "📌 Вы разработчик бота!\nДоступ к панели разработчика: /admin\n"
     
-    welcome_text += "\n\nНапиши /help, чтобы узнать все команды!"
+    welcome_text += "\nНапиши /help, чтобы узнать все команды!"
     
-    await message.answer(welcome_text, parse_mode=ParseMode.HTML)
-    log_event('INFO', f"User {user.id} started the bot")
+    await message.answer(welcome_text)
+
+@dp.callback_query(F.data == "verify_subscription")
+async def verify_subscription(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    link_id = data.get('link_id')
+    
+    await callback.message.edit_text("Проверяю статус подписки...")
+    
+    subgram_response = await check_subgram_subscription(
+        user_id=callback.from_user.id,
+        chat_id=callback.message.chat.id,
+        first_name=callback.from_user.first_name
+    )
+    
+    if subgram_response.get('status') == 'ok':
+        LAST_SUBSCRIPTION_CHECK[callback.from_user.id] = time.time()
+        await callback.message.edit_text("✅ Вы успешно подписались на все каналы!")
+        await asyncio.sleep(2)
+        await callback.message.delete()
+        await process_link(link_id, callback.message, callback.from_user.id)
+        await show_welcome(callback.message)  # Показываем приветствие после контента
+    else:
+        keyboard = InlineKeyboardBuilder()
+        keyboard.add(InlineKeyboardButton(
+            text="✅ Я подписался", 
+            callback_data="verify_subscription"
+        ))
+        
+        channels_text = "📢 Необходимо подписаться на:\n"
+        if 'links' in subgram_response:
+            for link in subgram_response['links']:
+                channels_text += f"• {link}\n"
+        
+        await callback.message.edit_text(
+            channels_text,
+            reply_markup=keyboard.as_markup()
+        )
+    
+    await callback.answer()
 
 # User stats command handler
 @dp.message(Command('user_stats'))
@@ -1178,23 +1224,19 @@ async def process_link(link_id: str, message: Message, user_id: int):
     link = cursor.fetchone()
     
     if link:
+        if link[1] == 'text':
+            await message.answer(link[2])
+        elif link[1] == 'photo':
+            await message.answer_photo(link[3], caption=link[2])
+        elif link[1] == 'document':
+            await message.answer_document(link[3], caption=link[2])
+        
+        # Обновляем статистику
         cursor.execute('UPDATE links SET visits = visits + 1 WHERE link_id = ?', (link_id,))
         cursor.execute('UPDATE users SET link_visits = link_visits + 1 WHERE user_id = ?', (user_id,))
         conn.commit()
-        
-        content_type = link[1]
-        content_text = link[2]
-        content_file_id = link[3]
-        
-        if content_type == 'text':
-            await message.answer(content_text)
-        elif content_type == 'photo':
-            await message.answer_photo(content_file_id, caption=content_text)
-        elif content_type == 'document':
-            await message.answer_document(content_file_id, caption=content_text)
-        
-        conn.close()
-        log_event('INFO', f"User {user_id} accessed link {link_id}")
+    
+    conn.close()
 
 # Admin back callback
 @dp.callback_query(F.data == "admin_back")
