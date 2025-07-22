@@ -556,7 +556,57 @@ async def subgram_check_with_message_callback(callback: CallbackQuery):
         log_event('ERROR', f"Error in subgram_check_with_message_callback: {str(e)}")
         await callback.answer("❌ Произошла ошибка при проверке подписки")
 
+async def check_subscription_required(handler):
+    async def wrapper(message: Message | CallbackQuery, *args, **kwargs):
+        # Для админов/разработчиков пропускаем проверку
+        if isinstance(message, Message):
+            user_id = message.from_user.id
+        else:
+            user_id = message.message.from_user.id
+            
+        if is_admin(user_id) or is_developer(user_id):
+            return await handler(message, *args, **kwargs)
+            
+        # Проверяем подписку
+        subgram_response = await check_subgram_subscription(
+            user_id=user_id,
+            chat_id=message.chat.id,
+            first_name=message.from_user.first_name
+        )
+        
+        if subgram_response.get('status') != 'ok':
+            # Показываем каналы для подписки
+            keyboard = InlineKeyboardBuilder()
+            keyboard.add(InlineKeyboardButton(
+                text="✅ Я подписался", 
+                callback_data="verify_subscription"
+            ))
+            
+            channels_text = "📢 Для использования бота подпишитесь на:\n"
+            if 'links' in subgram_response:
+                for link in subgram_response['links']:
+                    channels_text += f"• {link}\n"
+            elif 'additional' in subgram_response:
+                for sponsor in subgram_response['additional']['sponsors']:
+                    channels_text += f"• {sponsor['link']}\n"
+            
+            if isinstance(message, Message):
+                await message.answer(
+                    channels_text,
+                    reply_markup=keyboard.as_markup()
+                )
+            else:
+                await message.message.edit_text(
+                    channels_text,
+                    reply_markup=keyboard.as_markup()
+                )
+            return
+            
+        return await handler(message, *args, **kwargs)
+    return wrapper
+
 @dp.message(CommandStart())
+@check_subscription_required
 async def cmd_start(message: Message, state: FSMContext):
     start_args = message.text.split()
     user = message.from_user
@@ -569,57 +619,12 @@ async def cmd_start(message: Message, state: FSMContext):
     if len(start_args) > 1:
         link_id = start_args[1]
         await state.update_data(link_id=link_id)
-        
-        # Получаем список каналов от SubGram
-        subgram_response = await check_subgram_subscription(
-            user_id=user.id,
-            chat_id=message.chat.id,
-            first_name=user.first_name
-        )
-        
-        # Проверяем, есть ли каналы для подписки
-        has_channels = 'links' in subgram_response and len(subgram_response['links']) > 0
-        
-        if has_channels:
-            # Первое сообщение с кнопкой "Я выполнил" (только если есть каналы)
-            keyboard = InlineKeyboardBuilder()
-            keyboard.add(InlineKeyboardButton(
-                text="✅ Я выполнил", 
-                callback_data="verify_subscription_step1"
-            ))
-            
-            channels_text = "📢 Подпишитесь на каналы:\n\n"
-            for link in subgram_response['links']:
-                channels_text += f"• {link}\n"
-            
-            await message.answer(
-                channels_text,
-                reply_markup=keyboard.as_markup()
-            )
-        
-        # Второе сообщение с кнопкой "Я подписался" (всегда)
-        keyboard2 = InlineKeyboardBuilder()
-        keyboard2.add(InlineKeyboardButton(
-            text="✅ Я подписался", 
-            callback_data="verify_subscription_step2"
-        ))
-        
-        await message.answer(
-            "После подписки нажмите кнопку ниже:" if has_channels else "Нажмите кнопку ниже для продолжения:",
-            reply_markup=keyboard2.as_markup()
-        )
-    else:
-        await show_welcome(message)
-
-@dp.callback_query(F.data == "verify_subscription_step1")
-async def verify_subscription_step1(callback: CallbackQuery):
-    await callback.answer("Пожалуйста, сначала подпишитесь на все каналы, затем нажмите 'Я подписался'")
-
-@dp.callback_query(F.data == "verify_subscription_step2")
-async def verify_subscription_step2(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    link_id = data.get('link_id')
+        await process_link(link_id, message, user.id)
     
+    await show_welcome(message)
+
+@dp.callback_query(F.data == "verify_subscription")
+async def verify_subscription(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Проверяю статус подписки...")
     
     subgram_response = await check_subgram_subscription(
@@ -634,22 +639,20 @@ async def verify_subscription_step2(callback: CallbackQuery, state: FSMContext):
         await asyncio.sleep(2)
         await callback.message.delete()
         
-        # Отправляем контент ссылки
-        await process_link(link_id, callback.message, callback.from_user.id)
+        # Повторяем исходный запрос
+        if hasattr(callback, 'original_message'):
+            await dp.process_update(callback.original_message)
     else:
         keyboard = InlineKeyboardBuilder()
         keyboard.add(InlineKeyboardButton(
             text="✅ Я подписался", 
-            callback_data="verify_subscription_step2"
+            callback_data="verify_subscription"
         ))
         
-        # Проверяем, есть ли каналы для отображения
-        if 'links' in subgram_response and subgram_response['links']:
-            channels_text = "📢 Необходимо подписаться на:\n"
+        channels_text = "❌ Вы не подписаны на все каналы:\n"
+        if 'links' in subgram_response:
             for link in subgram_response['links']:
                 channels_text += f"• {link}\n"
-        else:
-            channels_text = "❌ Не удалось проверить подписки. Попробуйте еще раз."
         
         await callback.message.edit_text(
             channels_text,
@@ -657,7 +660,7 @@ async def verify_subscription_step2(callback: CallbackQuery, state: FSMContext):
         )
     
     await callback.answer()
-    
+
 async def show_welcome(message: Message):
     user = message.from_user
     conn = sqlite3.connect('/root/bot_mirrozz_database.db')
@@ -685,6 +688,12 @@ async def show_welcome(message: Message):
     welcome_text += "\n\nНапиши /help, чтобы узнать все команды!"
     
     await message.answer(welcome_text, parse_mode=ParseMode.HTML)
+
+# Применяем проверку подписки ко всем обработчикам (кроме админки)
+def setup_subscription_check():
+    for handler in dp.message_handlers.handlers:
+        if not handler.handler.__name__.startswith('admin_'):
+            handler.filters.append(check_subscription_required)
 
 # Help command handler
 @dp.message(Command('help'))
