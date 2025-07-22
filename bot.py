@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Union, List, Dict, Any
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandStart
+from aiogram.types import ErrorEvent
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, 
     InlineKeyboardButton, FSInputFile, InputMediaPhoto,
@@ -1516,32 +1517,30 @@ async def admins_last_callback(callback: CallbackQuery, state: FSMContext):
 async def no_action_callback(callback: CallbackQuery):
     await callback.answer()
 
-
-
 # Обработчики навигации для списка репортов
 @dp.callback_query(F.data.startswith("reports_prev_"))
 async def reports_prev_callback(callback: CallbackQuery, state: FSMContext):
     parts = callback.data.split('_')
     page = int(parts[2]) - 1
-    reports_type = parts[3]
+    report_type = parts[3]
     
-    await process_reports_page(callback, state, page, reports_type)
+    await process_reports_page(callback, state, page, report_type)
 
 @dp.callback_query(F.data.startswith("reports_next_"))
 async def reports_next_callback(callback: CallbackQuery, state: FSMContext):
     parts = callback.data.split('_')
     page = int(parts[2]) + 1
-    reports_type = parts[3]
+    report_type = parts[3]
     
-    await process_reports_page(callback, state, page, reports_type)
+    await process_reports_page(callback, state, page, report_type)
 
-async def process_reports_page(callback: CallbackQuery, state: FSMContext, page: int, reports_type: str):
+async def process_reports_page(callback: CallbackQuery, state: FSMContext, page: int, report_type: str):
     conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     
     cursor.execute(
-        f'SELECT COUNT(*) FROM reports WHERE status = ?',
-        ("open" if reports_type == "open" else "closed",)
+        'SELECT COUNT(*) FROM reports WHERE status = ?',
+        (report_type,)
     )
     total_reports = cursor.fetchone()[0]
     items_per_page = 5
@@ -1549,13 +1548,13 @@ async def process_reports_page(callback: CallbackQuery, state: FSMContext, page:
     
     cursor.execute(
         f'''
-        SELECT report_id, user_id, message, report_date 
+        SELECT report_id, user_id, message, report_date, status
         FROM reports 
         WHERE status = ?
         ORDER BY report_date DESC 
         LIMIT ? OFFSET ?
         ''',
-        ("open" if reports_type == "open" else "closed", items_per_page, page * items_per_page)
+        (report_type, items_per_page, page * items_per_page)
     )
     reports = cursor.fetchall()
     conn.close()
@@ -1563,7 +1562,7 @@ async def process_reports_page(callback: CallbackQuery, state: FSMContext, page:
     await state.update_data(
         reports_page=page,
         total_pages=total_pages,
-        reports_type=reports_type
+        reports_type=report_type
     )
     
     # Удаляем предыдущие сообщения
@@ -1629,11 +1628,14 @@ async def show_reports(callback: CallbackQuery, state: FSMContext):
     
     conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
+    
+    # Получаем общее количество репортов данного типа
     cursor.execute('SELECT COUNT(*) FROM reports WHERE status = ?', (report_type,))
     total = cursor.fetchone()[0]
     
+    # Получаем первую страницу репортов (5 на страницу)
     cursor.execute('''
-        SELECT report_id, user_id, message, report_date 
+        SELECT report_id, user_id, message, report_date, status 
         FROM reports 
         WHERE status = ?
         ORDER BY report_date DESC 
@@ -1644,11 +1646,13 @@ async def show_reports(callback: CallbackQuery, state: FSMContext):
     
     await state.update_data(
         reports_page=0,
-        total_pages=(total + 4) // 5,  # 5 items per page
+        total_pages=(total + 4) // 5,  # Округляем вверх
         reports_type=report_type
     )
     
+    await callback.message.delete()  # Удаляем предыдущее сообщение
     await show_reports_page(callback.message, state, reports, 0, (total + 4) // 5)
+    await callback.answer()
 
 # Улучшенная функция показа страницы с репортами
 async def show_reports_page(message: Message, state: FSMContext, reports: list, page: int, total_pages: int):
@@ -1656,11 +1660,12 @@ async def show_reports_page(message: Message, state: FSMContext, reports: list, 
     report_type = data["reports_type"]
     
     if not reports:
-        await message.edit_text(f"❌ Нет {report_type} репортов.")
+        await message.answer(f"❌ Нет {report_type} репортов.")
         return
     
+    # Отправляем каждый репорт отдельным сообщением
     for report in reports:
-        report_id, user_id, message_text, report_date = report
+        report_id, user_id, message_text, report_date, status = report
         
         try:
             user = await bot.get_chat(user_id)
@@ -1669,14 +1674,14 @@ async def show_reports_page(message: Message, state: FSMContext, reports: list, 
             user_info = "Неизвестный пользователь"
         
         text = f"""
-📋 Репорт #{report_id} ({'открыт' if report_type == 'open' else 'закрыт'})
+📋 Репорт #{report_id} ({status})
 👤 От: {user_info}
 📅 Дата: {report_date}
 📝 Сообщение: {message_text[:200]}...
 """
         keyboard = InlineKeyboardBuilder()
         
-        if report_type == "open":
+        if status == "open":
             keyboard.add(InlineKeyboardButton(
                 text="✉️ Ответить", 
                 callback_data=f"answer_report_{report_id}"
@@ -1693,14 +1698,20 @@ async def show_reports_page(message: Message, state: FSMContext, reports: list, 
         
         await message.answer(text, reply_markup=keyboard.as_markup())
 
-    # Кнопки навигации
+    # Кнопки навигации (только если есть несколько страниц)
     if total_pages > 1:
         nav_keyboard = InlineKeyboardBuilder()
+        
         if page > 0:
             nav_keyboard.add(InlineKeyboardButton(
                 text="⬅️ Назад", 
                 callback_data=f"reports_prev_{page}_{report_type}"
             ))
+        
+        nav_keyboard.add(InlineKeyboardButton(
+            text=f"{page+1}/{total_pages}", 
+            callback_data="no_action"
+        ))
         
         if page < total_pages - 1:
             nav_keyboard.add(InlineKeyboardButton(
@@ -1708,7 +1719,10 @@ async def show_reports_page(message: Message, state: FSMContext, reports: list, 
                 callback_data=f"reports_next_{page}_{report_type}"
             ))
         
-        await message.answer("Страница {page+1}/{total_pages}", reply_markup=nav_keyboard.as_markup())
+        await message.answer(
+            f"Страница {page+1} из {total_pages}", 
+            reply_markup=nav_keyboard.as_markup()
+        )
 
 @dp.message(Form.answer_report)
 async def answer_report_handler(message: Message, state: FSMContext):
@@ -3618,12 +3632,8 @@ async def restart_bot_callback(callback: CallbackQuery):
     os._exit(0)
 
 @dp.errors()
-async def error_handler(update: types.Update, exception: Exception):
-    log_event('ERROR', f"Update {update.update_id if update else 'None'} caused error: {str(exception)}")
-    if update and update.message:
-        await update.message.answer("❌ Произошла ошибка. Пожалуйста, попробуйте позже.")
-    elif update and update.callback_query:
-        await update.callback_query.answer("❌ Произошла ошибка.")
+async def error_handler(event: ErrorEvent):
+    logger.error(f"Ошибка в обработке обновления {event.update.update_id}: {str(event.exception)}")
     return True
 
 # Main function
