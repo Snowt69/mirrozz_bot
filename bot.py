@@ -235,6 +235,37 @@ async def check_subgram_subscription(
 
 
 # Helper functions
+def can_send_report(user_id: int) -> tuple[bool, str]:
+    """Проверяет, может ли пользователь отправить репорт.
+    Возвращает (может_отправить, сообщение_об_ошибке)"""
+    if is_admin(user_id) or is_developer(user_id):
+        return True, ""
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT report_date FROM reports 
+        WHERE user_id = ? 
+        ORDER BY report_date DESC 
+        LIMIT 1
+    ''', (user_id,))
+    last_report = cursor.fetchone()
+    conn.close()
+    
+    if not last_report:
+        return True, ""
+    
+    last_report_time = datetime.strptime(last_report[0], "%Y-%m-%d %H:%M:%S")
+    time_since_last = datetime.now() - last_report_time
+    
+    if time_since_last.total_seconds() < 1800:  # 30 минут = 1800 секунд
+        remaining = 1800 - time_since_last.total_seconds()
+        minutes = int(remaining // 60)
+        seconds = int(remaining % 60)
+        return False, f"❌ Вы можете отправлять репорты только раз в 30 минут.\nПопробуйте через {minutes} мин. {seconds} сек."
+    
+    return True, ""
+
 def generate_random_string(length=8):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
@@ -686,6 +717,12 @@ async def cmd_report(message: Message, state: FSMContext):
         await message.answer("❌ Вы заблокированы в этом боте.")
         return
     
+    # Проверяем, может ли пользователь отправить репорт
+    can_send, error_msg = can_send_report(message.from_user.id)
+    if not can_send:
+        await message.answer(error_msg)
+        return
+    
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
         await message.answer("❌ Пожалуйста, укажите сообщение для жалобы.\nПример: /report Это спам")
@@ -712,11 +749,15 @@ async def cmd_report(message: Message, state: FSMContext):
         try:
             await bot.send_message(
                 admin_id,
-                f"⚠️ Новый репорт #{report_id}!\n\nОт: {user.full_name} (@{user.username or 'нет'})\nID: {user.id}\nДата: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\nСообщение: {report_text}",
+                f"⚠️ Новый репорт #{report_id}!\n\n"
+                f"От: {user.full_name} (@{user.username or 'нет'})\n"
+                f"ID: {user.id}\n"
+                f"Дата: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                f"Сообщение: {report_text}",
                 reply_markup=keyboard.as_markup()
             )
-        except:
-            pass
+        except Exception as e:
+            log_event('ERROR', f"Не удалось отправить репорт админу {admin_id}: {str(e)}")
     
     await message.answer("✅ Ваша жалоба отправлена администраторам. Ответ придёт в течение 30 минут.")
     log_event('INFO', f"User {user.id} submitted report #{report_id}")
