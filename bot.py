@@ -1145,7 +1145,15 @@ async def list_links_callback(callback: CallbackQuery, state: FSMContext):
     cursor = conn.cursor()
     cursor.execute('SELECT COUNT(*) FROM links')
     total_links = cursor.fetchone()[0]
-    cursor.execute('SELECT link_id, created_by, creation_date, visits FROM links ORDER BY creation_date DESC LIMIT 10 OFFSET 0')
+    items_per_page = 10
+    total_pages = (total_links + items_per_page - 1) // items_per_page
+    
+    cursor.execute('''
+        SELECT link_id, created_by, creation_date, visits 
+        FROM links 
+        ORDER BY creation_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (items_per_page, 0))
     links = cursor.fetchall()
     conn.close()
     
@@ -1154,17 +1162,12 @@ async def list_links_callback(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     
-    await state.update_data(links_page=0, total_links=total_links)
-    await show_links_page(callback.message, state, links)
+    await state.update_data(links_page=0, total_pages=total_pages)
+    await show_links_page(callback.message, state, links, 0, total_pages)
     await callback.answer()
 
-async def show_links_page(message: Message, state: FSMContext, links: list):
-    data = await state.get_data()
-    page = data.get('links_page', 0)
-    total_links = data.get('total_links', 0)
-    total_pages = (total_links + 9) // 10  # Округляем вверх
-    
-    links_text = f"{hbold('📋 Список ссылок')} (Страница {page + 1}/{total_pages})\n\n"
+async def show_links_page(message: Message, state: FSMContext, links: list, page: int, total_pages: int):
+    links_text = f"{hbold('📋 Список ссылок')}\n\n"
     for link in links:
         link_id, created_by, creation_date, visits = link
         bot_username = (await bot.get_me()).username
@@ -1178,45 +1181,92 @@ async def show_links_page(message: Message, state: FSMContext, links: list):
         
         links_text += f"🔗 {hlink('Перейти', link_url)}\n👤 Создал: {creator_name}\n📅 Дата: {creation_date}\n👀 Переходов: {visits}\n\n"
     
-    keyboard = InlineKeyboardBuilder()
-    
-    # Кнопки навигации
-    if page > 0:
-        keyboard.add(InlineKeyboardButton(text="⬅️ Предыдущая", callback_data=f"links_prev_{page}"))
-    if (page + 1) * 10 < total_links:
-        keyboard.add(InlineKeyboardButton(text="➡️ Следующая", callback_data=f"links_next_{page}"))
-    
-    keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="admin_links"))
-    keyboard.adjust(2)
+    keyboard = create_navigation_keyboard(page, total_pages, "admin_links", "links_")
     
     await message.edit_text(links_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
 
+# Обработчики навигации для списка ссылок
 @dp.callback_query(F.data.startswith("links_prev_"))
 async def links_prev_callback(callback: CallbackQuery, state: FSMContext):
     page = int(callback.data.split('_')[2]) - 1
-    await state.update_data(links_page=page)
+    data = await state.get_data()
+    total_pages = data['total_pages']
     
     conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT link_id, created_by, creation_date, visits FROM links ORDER BY creation_date DESC LIMIT 10 OFFSET ?', (page * 10,))
+    cursor.execute('''
+        SELECT link_id, created_by, creation_date, visits 
+        FROM links 
+        ORDER BY creation_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (10, page * 10))
     links = cursor.fetchall()
     conn.close()
     
-    await show_links_page(callback.message, state, links)
+    await state.update_data(links_page=page)
+    await show_links_page(callback.message, state, links, page, total_pages)
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("links_next_"))
 async def links_next_callback(callback: CallbackQuery, state: FSMContext):
     page = int(callback.data.split('_')[2]) + 1
-    await state.update_data(links_page=page)
+    data = await state.get_data()
+    total_pages = data['total_pages']
     
     conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT link_id, created_by, creation_date, visits FROM links ORDER BY creation_date DESC LIMIT 10 OFFSET ?', (page * 10,))
+    cursor.execute('''
+        SELECT link_id, created_by, creation_date, visits 
+        FROM links 
+        ORDER BY creation_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (10, page * 10))
     links = cursor.fetchall()
     conn.close()
     
-    await show_links_page(callback.message, state, links)
+    await state.update_data(links_page=page)
+    await show_links_page(callback.message, state, links, page, total_pages)
+    await callback.answer()
+
+@dp.callback_query(F.data == "links_first")
+async def links_first_callback(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    total_pages = data['total_pages']
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT link_id, created_by, creation_date, visits 
+        FROM links 
+        ORDER BY creation_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (10, 0))
+    links = cursor.fetchall()
+    conn.close()
+    
+    await state.update_data(links_page=0)
+    await show_links_page(callback.message, state, links, 0, total_pages)
+    await callback.answer()
+
+@dp.callback_query(F.data == "links_last")
+async def links_last_callback(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    total_pages = data['total_pages']
+    page = total_pages - 1
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT link_id, created_by, creation_date, visits 
+        FROM links 
+        ORDER BY creation_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (10, page * 10))
+    links = cursor.fetchall()
+    conn.close()
+    
+    await state.update_data(links_page=page)
+    await show_links_page(callback.message, state, links, page, total_pages)
     await callback.answer()
 
 # Admin back callback
@@ -1400,16 +1450,46 @@ async def confirm_remove_admin_callback(callback: CallbackQuery):
     await callback.answer()
     log_event('INFO', f"Admin {callback.from_user.id} removed admin {admin_id}")
 
+def create_navigation_keyboard(page: int, total_pages: int, back_callback: str, prefix: str = ""):
+    keyboard = InlineKeyboardBuilder()
+    
+    # Добавляем кнопки навигации
+    if page > 0:
+        keyboard.add(InlineKeyboardButton(text="⏪ В начало", callback_data=f"{prefix}first"))
+        keyboard.add(InlineKeyboardButton(text="◀️ Назад", callback_data=f"{prefix}prev_{page}"))
+    
+    # Кнопка с текущей страницей
+    keyboard.add(InlineKeyboardButton(text=f"{page+1}/{total_pages}", callback_data="no_action"))
+    
+    if page < total_pages - 1:
+        keyboard.add(InlineKeyboardButton(text="Вперед ▶️", callback_data=f"{prefix}next_{page}"))
+        keyboard.add(InlineKeyboardButton(text="В конец ⏩", callback_data=f"{prefix}last"))
+    
+    # Кнопка возврата
+    keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data=back_callback))
+    
+    keyboard.adjust(4, 1)  # 4 кнопки в первом ряду, 1 во втором
+    return keyboard
+
 # List admins callback
 @dp.callback_query(F.data == "list_admins")
-async def list_admins_callback(callback: CallbackQuery):
+async def list_admins_callback(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer("❌ У вас нет доступа.")
         return
     
     conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT admin_id, username, first_name, last_name, added_by, add_date FROM admins')
+    cursor.execute('SELECT COUNT(*) FROM admins')
+    total_admins = cursor.fetchone()[0]
+    items_per_page = 10
+    total_pages = (total_admins + items_per_page - 1) // items_per_page
+    
+    cursor.execute('''
+        SELECT admin_id, username, first_name, last_name, added_by, add_date 
+        FROM admins 
+        LIMIT ? OFFSET ?
+    ''', (items_per_page, 0))
     admins = cursor.fetchall()
     conn.close()
     
@@ -1418,17 +1498,114 @@ async def list_admins_callback(callback: CallbackQuery):
         await callback.answer()
         return
     
+    await state.update_data(admins_page=0, total_pages=total_pages)
+    await show_admins_page(callback.message, state, admins, 0, total_pages)
+    await callback.answer()
+
+async def show_admins_page(message: Message, state: FSMContext, admins: list, page: int, total_pages: int):
     admins_text = f"{hbold('👑 Список администраторов')}\n\n"
     for admin in admins:
         admin_id, username, first_name, last_name, added_by, add_date = admin
+        try:
+            adder = await bot.get_chat(added_by)
+            adder_name = adder.full_name
+        except:
+            adder_name = "Неизвестно"
+        
         admins_text += f"👤 {first_name} {last_name if last_name else ''}\n"
         admins_text += f"📛 @{username if username else 'нет'}\n"
         admins_text += f"🆔 {admin_id}\n"
-        admins_text += f"📅 Добавлен: {add_date}\n\n"
+        admins_text += f"👤 Добавил: {adder_name}\n"
+        admins_text += f"📅 Дата: {add_date}\n\n"
     
-    await callback.message.answer(admins_text, parse_mode=ParseMode.HTML)
+    keyboard = create_navigation_keyboard(page, total_pages, "admin_admins", "admins_")
+    
+    await message.edit_text(admins_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
+
+# Обработчики навигации для списка администраторов
+@dp.callback_query(F.data.startswith("admins_prev_"))
+async def admins_prev_callback(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split('_')[2]) - 1
+    data = await state.get_data()
+    total_pages = data['total_pages']
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT admin_id, username, first_name, last_name, added_by, add_date 
+        FROM admins 
+        LIMIT ? OFFSET ?
+    ''', (10, page * 10))
+    admins = cursor.fetchall()
+    conn.close()
+    
+    await state.update_data(admins_page=page)
+    await show_admins_page(callback.message, state, admins, page, total_pages)
     await callback.answer()
-    log_event('INFO', f"Admin {callback.from_user.id} viewed admins list")
+
+@dp.callback_query(F.data.startswith("admins_next_"))
+async def admins_next_callback(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split('_')[2]) + 1
+    data = await state.get_data()
+    total_pages = data['total_pages']
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT admin_id, username, first_name, last_name, added_by, add_date 
+        FROM admins 
+        LIMIT ? OFFSET ?
+    ''', (10, page * 10))
+    admins = cursor.fetchall()
+    conn.close()
+    
+    await state.update_data(admins_page=page)
+    await show_admins_page(callback.message, state, admins, page, total_pages)
+    await callback.answer()
+
+@dp.callback_query(F.data == "admins_first")
+async def admins_first_callback(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    total_pages = data['total_pages']
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT admin_id, username, first_name, last_name, added_by, add_date 
+        FROM admins 
+        LIMIT ? OFFSET ?
+    ''', (10, 0))
+    admins = cursor.fetchall()
+    conn.close()
+    
+    await state.update_data(admins_page=0)
+    await show_admins_page(callback.message, state, admins, 0, total_pages)
+    await callback.answer()
+
+@dp.callback_query(F.data == "admins_last")
+async def admins_last_callback(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    total_pages = data['total_pages']
+    page = total_pages - 1
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT admin_id, username, first_name, last_name, added_by, add_date 
+        FROM admins 
+        LIMIT ? OFFSET ?
+    ''', (10, page * 10))
+    admins = cursor.fetchall()
+    conn.close()
+    
+    await state.update_data(admins_page=page)
+    await show_admins_page(callback.message, state, admins, page, total_pages)
+    await callback.answer()
+
+# Пустая callback для кнопки с номером страницы
+@dp.callback_query(F.data == "no_action")
+async def no_action_callback(callback: CallbackQuery):
+    await callback.answer()
 
 # Admin reports callback
 @dp.callback_query(F.data == "admin_reports")
@@ -1449,6 +1626,7 @@ async def admin_reports_callback(callback: CallbackQuery):
     await callback.answer()
 
 # All reports callback
+# All reports callback - модифицированная версия
 @dp.callback_query(F.data == "all_reports")
 async def all_reports_callback(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
@@ -1459,7 +1637,16 @@ async def all_reports_callback(callback: CallbackQuery, state: FSMContext):
     cursor = conn.cursor()
     cursor.execute('SELECT COUNT(*) FROM reports WHERE status = "open"')
     total_reports = cursor.fetchone()[0]
-    cursor.execute('SELECT report_id, user_id, message, report_date FROM reports WHERE status = "open" ORDER BY report_date DESC LIMIT 10 OFFSET 0')
+    items_per_page = 10
+    total_pages = (total_reports + items_per_page - 1) // items_per_page
+    
+    cursor.execute('''
+        SELECT report_id, user_id, message, report_date 
+        FROM reports 
+        WHERE status = "open" 
+        ORDER BY report_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (items_per_page, 0))
     reports = cursor.fetchall()
     conn.close()
     
@@ -1468,16 +1655,11 @@ async def all_reports_callback(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     
-    await state.update_data(reports_page=0, total_reports=total_reports)
-    await show_reports_page(callback.message, state, reports)
+    await state.update_data(reports_page=0, total_pages=total_pages)
+    await show_reports_page(callback.message, state, reports, 0, total_pages)
     await callback.answer()
 
-async def show_reports_page(message: Message, state: FSMContext, reports: list):
-    data = await state.get_data()
-    page = data.get('reports_page', 0)
-    total_reports = data.get('total_reports', 0)
-    total_pages = (total_reports + 9) // 10
-    
+async def show_reports_page(message: Message, state: FSMContext, reports: list, page: int, total_pages: int):
     reports_text = f"{hbold('⚠️ Открытые репорты')} (Страница {page + 1}/{total_pages})\n\n"
     
     for report in reports:
@@ -1505,18 +1687,97 @@ async def show_reports_page(message: Message, state: FSMContext, reports: list):
         await message.answer(reports_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
         reports_text = ""
     
-    # Добавляем навигацию только если есть несколько страниц
-    if total_pages > 1:
-        nav_keyboard = InlineKeyboardBuilder()
-        if page > 0:
-            nav_keyboard.add(InlineKeyboardButton(text="⬅️ Предыдущая", callback_data=f"reports_prev_{page}"))
-        if (page + 1) * 10 < total_reports:
-            nav_keyboard.add(InlineKeyboardButton(text="➡️ Следующая", callback_data=f"reports_next_{page}"))
-        
-        nav_keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="admin_reports"))
-        nav_keyboard.adjust(2)
-        
-        await message.answer("Навигация по репортам:", reply_markup=nav_keyboard.as_markup())
+    # Добавляем навигацию
+    nav_keyboard = create_navigation_keyboard(page, total_pages, "admin_reports", "reports_")
+    await message.answer("Навигация по репортам:", reply_markup=nav_keyboard.as_markup())
+
+# Обработчики навигации для списка репортов
+@dp.callback_query(F.data.startswith("reports_prev_"))
+async def reports_prev_callback(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split('_')[2]) - 1
+    data = await state.get_data()
+    total_pages = data['total_pages']
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT report_id, user_id, message, report_date 
+        FROM reports 
+        WHERE status = "open" 
+        ORDER BY report_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (10, page * 10))
+    reports = cursor.fetchall()
+    conn.close()
+    
+    await state.update_data(reports_page=page)
+    await show_reports_page(callback.message, state, reports, page, total_pages)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("reports_next_"))
+async def reports_next_callback(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split('_')[2]) + 1
+    data = await state.get_data()
+    total_pages = data['total_pages']
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT report_id, user_id, message, report_date 
+        FROM reports 
+        WHERE status = "open" 
+        ORDER BY report_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (10, page * 10))
+    reports = cursor.fetchall()
+    conn.close()
+    
+    await state.update_data(reports_page=page)
+    await show_reports_page(callback.message, state, reports, page, total_pages)
+    await callback.answer()
+
+@dp.callback_query(F.data == "reports_first")
+async def reports_first_callback(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    total_pages = data['total_pages']
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT report_id, user_id, message, report_date 
+        FROM reports 
+        WHERE status = "open" 
+        ORDER BY report_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (10, 0))
+    reports = cursor.fetchall()
+    conn.close()
+    
+    await state.update_data(reports_page=0)
+    await show_reports_page(callback.message, state, reports, 0, total_pages)
+    await callback.answer()
+
+@dp.callback_query(F.data == "reports_last")
+async def reports_last_callback(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    total_pages = data['total_pages']
+    page = total_pages - 1
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT report_id, user_id, message, report_date 
+        FROM reports 
+        WHERE status = "open" 
+        ORDER BY report_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (10, page * 10))
+    reports = cursor.fetchall()
+    conn.close()
+    
+    await state.update_data(reports_page=page)
+    await show_reports_page(callback.message, state, reports, page, total_pages)
+    await callback.answer()
 
 # Answer report callback
 @dp.callback_query(F.data.startswith("answer_report_"))
@@ -1884,14 +2145,25 @@ async def unban_user_callback(callback: CallbackQuery):
 
 # Banned users callback
 @dp.callback_query(F.data == "banned_users")
-async def banned_users_callback(callback: CallbackQuery):
+async def banned_users_callback(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer("❌ У вас нет доступа.")
         return
     
     conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT user_id, username, first_name, last_name, ban_reason, banned_by, ban_date FROM users WHERE is_banned = 1')
+    cursor.execute('SELECT COUNT(*) FROM users WHERE is_banned = 1')
+    total_banned = cursor.fetchone()[0]
+    items_per_page = 10
+    total_pages = (total_banned + items_per_page - 1) // items_per_page
+    
+    cursor.execute('''
+        SELECT user_id, username, first_name, last_name, ban_reason, banned_by, ban_date 
+        FROM users 
+        WHERE is_banned = 1
+        ORDER BY ban_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (items_per_page, 0))
     banned_users = cursor.fetchall()
     conn.close()
     
@@ -1900,7 +2172,13 @@ async def banned_users_callback(callback: CallbackQuery):
         await callback.answer()
         return
     
-    banned_text = f"{hbold('🚫 Заблокированные пользователи')}\n\n"
+    await state.update_data(banned_page=0, total_pages=total_pages)
+    await show_banned_page(callback.message, state, banned_users, 0, total_pages)
+    await callback.answer()
+
+async def show_banned_page(message: Message, state: FSMContext, banned_users: list, page: int, total_pages: int):
+    banned_text = f"{hbold('🚫 Заблокированные пользователи')} (Страница {page + 1}/{total_pages})\n\n"
+    
     for user in banned_users:
         user_id, username, first_name, last_name, ban_reason, banned_by, ban_date = user
         banned_text += f"👤 {first_name} {last_name if last_name else ''}\n"
@@ -1915,11 +2193,100 @@ async def banned_users_callback(callback: CallbackQuery):
         keyboard.add(InlineKeyboardButton(text="📊 Информация", callback_data=f"user_info_{user_id}"))
         keyboard.adjust(1)
         
-        await callback.message.answer(banned_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
+        await message.answer(banned_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
         banned_text = ""
     
+    # Добавляем навигацию только если есть несколько страниц
+    if total_pages > 1:
+        nav_keyboard = create_navigation_keyboard(page, total_pages, "admin_users", "banned_")
+        await message.answer("Навигация по списку:", reply_markup=nav_keyboard.as_markup())
+
+@dp.callback_query(F.data.startswith("banned_prev_"))
+async def banned_prev_callback(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split('_')[2]) - 1
+    data = await state.get_data()
+    total_pages = data['total_pages']
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT user_id, username, first_name, last_name, ban_reason, banned_by, ban_date 
+        FROM users 
+        WHERE is_banned = 1
+        ORDER BY ban_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (10, page * 10))
+    banned_users = cursor.fetchall()
+    conn.close()
+    
+    await state.update_data(banned_page=page)
+    await show_banned_page(callback.message, state, banned_users, page, total_pages)
     await callback.answer()
-    log_event('INFO', f"Admin {callback.from_user.id} viewed banned users")
+
+@dp.callback_query(F.data.startswith("banned_next_"))
+async def banned_next_callback(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split('_')[2]) + 1
+    data = await state.get_data()
+    total_pages = data['total_pages']
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT user_id, username, first_name, last_name, ban_reason, banned_by, ban_date 
+        FROM users 
+        WHERE is_banned = 1
+        ORDER BY ban_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (10, page * 10))
+    banned_users = cursor.fetchall()
+    conn.close()
+    
+    await state.update_data(banned_page=page)
+    await show_banned_page(callback.message, state, banned_users, page, total_pages)
+    await callback.answer()
+
+@dp.callback_query(F.data == "banned_first")
+async def banned_first_callback(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    total_pages = data['total_pages']
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT user_id, username, first_name, last_name, ban_reason, banned_by, ban_date 
+        FROM users 
+        WHERE is_banned = 1
+        ORDER BY ban_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (10, 0))
+    banned_users = cursor.fetchall()
+    conn.close()
+    
+    await state.update_data(banned_page=0)
+    await show_banned_page(callback.message, state, banned_users, 0, total_pages)
+    await callback.answer()
+
+@dp.callback_query(F.data == "banned_last")
+async def banned_last_callback(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    total_pages = data['total_pages']
+    page = total_pages - 1
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT user_id, username, first_name, last_name, ban_reason, banned_by, ban_date 
+        FROM users 
+        WHERE is_banned = 1
+        ORDER BY ban_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (10, page * 10))
+    banned_users = cursor.fetchall()
+    conn.close()
+    
+    await state.update_data(banned_page=page)
+    await show_banned_page(callback.message, state, banned_users, page, total_pages)
+    await callback.answer()
 
 # User info callback
 @dp.callback_query(F.data.startswith("user_info_"))
@@ -2136,14 +2503,24 @@ async def confirm_remove_channel_callback(callback: CallbackQuery):
 
 # List advertise callback
 @dp.callback_query(F.data == "list_advertise")
-async def list_advertise_callback(callback: CallbackQuery):
+async def list_advertise_callback(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer("❌ У вас нет доступа.")
         return
     
     conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT channel_id, username, title, added_by, add_date, check_type, subscribers_count FROM advertise_channels')
+    cursor.execute('SELECT COUNT(*) FROM advertise_channels')
+    total_channels = cursor.fetchone()[0]
+    items_per_page = 10
+    total_pages = (total_channels + items_per_page - 1) // items_per_page
+    
+    cursor.execute('''
+        SELECT channel_id, username, title, added_by, add_date, check_type, subscribers_count 
+        FROM advertise_channels 
+        ORDER BY add_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (items_per_page, 0))
     channels = cursor.fetchall()
     conn.close()
     
@@ -2152,7 +2529,13 @@ async def list_advertise_callback(callback: CallbackQuery):
         await callback.answer()
         return
     
-    channels_text = f"{hbold('📢 Список рекламных каналов/чатов')}\n\n"
+    await state.update_data(channels_page=0, total_pages=total_pages)
+    await show_channels_page(callback.message, state, channels, 0, total_pages)
+    await callback.answer()
+
+async def show_channels_page(message: Message, state: FSMContext, channels: list, page: int, total_pages: int):
+    channels_text = f"{hbold('📢 Список рекламных каналов')} (Страница {page + 1}/{total_pages})\n\n"
+    
     for channel in channels:
         channel_id, username, title, added_by, add_date, check_type, subscribers_count = channel
         
@@ -2170,9 +2553,92 @@ async def list_advertise_callback(callback: CallbackQuery):
         channels_text += f"🔍 Проверка: {'На все функции' if check_type == 1 else 'Только на ссылки'}\n"
         channels_text += f"👥 Подписчиков: {subscribers_count}\n\n"
     
-    await callback.message.answer(channels_text, parse_mode=ParseMode.HTML)
+    keyboard = create_navigation_keyboard(page, total_pages, "admin_advertise", "channels_")
+    
+    await message.edit_text(channels_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
+
+@dp.callback_query(F.data.startswith("channels_prev_"))
+async def channels_prev_callback(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split('_')[2]) - 1
+    data = await state.get_data()
+    total_pages = data['total_pages']
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT channel_id, username, title, added_by, add_date, check_type, subscribers_count 
+        FROM advertise_channels 
+        ORDER BY add_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (10, page * 10))
+    channels = cursor.fetchall()
+    conn.close()
+    
+    await state.update_data(channels_page=page)
+    await show_channels_page(callback.message, state, channels, page, total_pages)
     await callback.answer()
-    log_event('INFO', f"Admin {callback.from_user.id} viewed advertise channels list")
+
+@dp.callback_query(F.data.startswith("channels_next_"))
+async def channels_next_callback(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split('_')[2]) + 1
+    data = await state.get_data()
+    total_pages = data['total_pages']
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT channel_id, username, title, added_by, add_date, check_type, subscribers_count 
+        FROM advertise_channels 
+        ORDER BY add_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (10, page * 10))
+    channels = cursor.fetchall()
+    conn.close()
+    
+    await state.update_data(channels_page=page)
+    await show_channels_page(callback.message, state, channels, page, total_pages)
+    await callback.answer()
+
+@dp.callback_query(F.data == "channels_first")
+async def channels_first_callback(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    total_pages = data['total_pages']
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT channel_id, username, title, added_by, add_date, check_type, subscribers_count 
+        FROM advertise_channels 
+        ORDER BY add_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (10, 0))
+    channels = cursor.fetchall()
+    conn.close()
+    
+    await state.update_data(channels_page=0)
+    await show_channels_page(callback.message, state, channels, 0, total_pages)
+    await callback.answer()
+
+@dp.callback_query(F.data == "channels_last")
+async def channels_last_callback(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    total_pages = data['total_pages']
+    page = total_pages - 1
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT channel_id, username, title, added_by, add_date, check_type, subscribers_count 
+        FROM advertise_channels 
+        ORDER BY add_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (10, page * 10))
+    channels = cursor.fetchall()
+    conn.close()
+    
+    await state.update_data(channels_page=page)
+    await show_channels_page(callback.message, state, channels, page, total_pages)
+    await callback.answer()
 
 # Admin developer callback
 @dp.callback_query(F.data == "admin_developer")
@@ -2862,14 +3328,24 @@ async def confirm_remove_developer_callback(callback: CallbackQuery):
 
 # List developers callback
 @dp.callback_query(F.data == "list_developers")
-async def list_developers_callback(callback: CallbackQuery):
+async def list_developers_callback(callback: CallbackQuery, state: FSMContext):
     if not is_developer(callback.from_user.id):
         await callback.answer("❌ У вас нет доступа.")
         return
     
     conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT developer_id, username, first_name, last_name, added_by, add_date FROM developers')
+    cursor.execute('SELECT COUNT(*) FROM developers')
+    total_devs = cursor.fetchone()[0]
+    items_per_page = 10
+    total_pages = (total_devs + items_per_page - 1) // items_per_page
+    
+    cursor.execute('''
+        SELECT developer_id, username, first_name, last_name, added_by, add_date 
+        FROM developers 
+        ORDER BY add_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (items_per_page, 0))
     developers = cursor.fetchall()
     conn.close()
     
@@ -2878,24 +3354,113 @@ async def list_developers_callback(callback: CallbackQuery):
         await callback.answer()
         return
     
-    developers_text = f"{hbold('👨‍💻 Список разработчиков')}\n\n"
-    for developer in developers:
-        developer_id, username, first_name, last_name, added_by, add_date = developer
+    await state.update_data(devs_page=0, total_pages=total_pages)
+    await show_developers_page(callback.message, state, developers, 0, total_pages)
+    await callback.answer()
+
+async def show_developers_page(message: Message, state: FSMContext, developers: list, page: int, total_pages: int):
+    devs_text = f"{hbold('👨‍💻 Список разработчиков')} (Страница {page + 1}/{total_pages})\n\n"
+    
+    for dev in developers:
+        developer_id, username, first_name, last_name, added_by, add_date = dev
         try:
             adder = await bot.get_chat(added_by)
             adder_name = adder.full_name
         except:
             adder_name = "Неизвестно"
         
-        developers_text += f"👤 {first_name} {last_name if last_name else ''}\n"
-        developers_text += f"📛 @{username if username else 'нет'}\n"
-        developers_text += f"🆔 {developer_id}\n"
-        developers_text += f"👤 Добавил: {adder_name}\n"
-        developers_text += f"📅 Дата: {add_date}\n\n"
+        devs_text += f"👤 {first_name} {last_name if last_name else ''}\n"
+        devs_text += f"📛 @{username if username else 'нет'}\n"
+        devs_text += f"🆔 {developer_id}\n"
+        devs_text += f"👤 Добавил: {adder_name}\n"
+        devs_text += f"📅 Дата: {add_date}\n\n"
     
-    await callback.message.answer(developers_text, parse_mode=ParseMode.HTML)
+    keyboard = create_navigation_keyboard(page, total_pages, "developer_developers", "devs_")
+    
+    await message.edit_text(devs_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
+
+@dp.callback_query(F.data.startswith("devs_prev_"))
+async def devs_prev_callback(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split('_')[2]) - 1
+    data = await state.get_data()
+    total_pages = data['total_pages']
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT developer_id, username, first_name, last_name, added_by, add_date 
+        FROM developers 
+        ORDER BY add_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (10, page * 10))
+    developers = cursor.fetchall()
+    conn.close()
+    
+    await state.update_data(devs_page=page)
+    await show_developers_page(callback.message, state, developers, page, total_pages)
     await callback.answer()
-    log_event('INFO', f"Developer {callback.from_user.id} viewed developers list")
+
+@dp.callback_query(F.data.startswith("devs_next_"))
+async def devs_next_callback(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split('_')[2]) + 1
+    data = await state.get_data()
+    total_pages = data['total_pages']
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT developer_id, username, first_name, last_name, added_by, add_date 
+        FROM developers 
+        ORDER BY add_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (10, page * 10))
+    developers = cursor.fetchall()
+    conn.close()
+    
+    await state.update_data(devs_page=page)
+    await show_developers_page(callback.message, state, developers, page, total_pages)
+    await callback.answer()
+
+@dp.callback_query(F.data == "devs_first")
+async def devs_first_callback(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    total_pages = data['total_pages']
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT developer_id, username, first_name, last_name, added_by, add_date 
+        FROM developers 
+        ORDER BY add_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (10, 0))
+    developers = cursor.fetchall()
+    conn.close()
+    
+    await state.update_data(devs_page=0)
+    await show_developers_page(callback.message, state, developers, 0, total_pages)
+    await callback.answer()
+
+@dp.callback_query(F.data == "devs_last")
+async def devs_last_callback(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    total_pages = data['total_pages']
+    page = total_pages - 1
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT developer_id, username, first_name, last_name, added_by, add_date 
+        FROM developers 
+        ORDER BY add_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (10, page * 10))
+    developers = cursor.fetchall()
+    conn.close()
+    
+    await state.update_data(devs_page=page)
+    await show_developers_page(callback.message, state, developers, page, total_pages)
+    await callback.answer()
 
 # Developer server callback
 @dp.callback_query(F.data == "developer_server")
