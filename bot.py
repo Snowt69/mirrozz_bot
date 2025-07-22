@@ -1516,228 +1516,7 @@ async def admins_last_callback(callback: CallbackQuery, state: FSMContext):
 async def no_action_callback(callback: CallbackQuery):
     await callback.answer()
 
-# Admin reports callback - измененная версия
-@dp.callback_query(F.data == "admin_reports")
-async def admin_reports_callback(callback: CallbackQuery):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("❌ У вас нет доступа.")
-        return
-    
-    keyboard = InlineKeyboardBuilder()
-    keyboard.add(InlineKeyboardButton(text="📜 Список репортов", callback_data="report_list"))
-    keyboard.add(InlineKeyboardButton(text="🗑 Удалить репорт", callback_data="delete_report"))
-    keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back"))
-    
-    keyboard.adjust(1)
-    
-    await callback.message.edit_text(f"{hbold('⚠️ Управление репортами')}", reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
-    await callback.answer()
 
-# All reports callback - модифицированная версия
-
-
-
-@dp.callback_query(F.data == "all_reports")
-async def all_reports_callback(callback: CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("❌ У вас нет доступа.")
-        return
-    
-    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) FROM reports WHERE status = "open"')
-    total_reports = cursor.fetchone()[0]
-    items_per_page = 10
-    total_pages = (total_reports + items_per_page - 1) // items_per_page
-    
-    cursor.execute('''
-        SELECT report_id, user_id, message, report_date 
-        FROM reports 
-        WHERE status = "open" 
-        ORDER BY report_date DESC 
-        LIMIT ? OFFSET ?
-    ''', (items_per_page, 0))
-    reports = cursor.fetchall()
-    conn.close()
-    
-    if not reports:
-        await callback.message.answer("❌ Нет открытых репортов.")
-        await callback.answer()
-        return
-    
-    await state.update_data(reports_page=0, total_pages=total_pages)
-    await show_reports_page(callback.message, state, reports, 0, total_pages)
-    await callback.answer()
-
-async def show_reports_page(message: Message, state: FSMContext, reports: list, page: int, total_pages: int):
-    reports_text = f"{hbold('⚠️ Открытые репорты')} (Страница {page + 1}/{total_pages})\n\n"
-    
-    for report in reports:
-        report_id, user_id, message, report_date = report
-        
-        try:
-            user = await bot.get_chat(user_id)
-            user_name = user.full_name
-            username = f"@{user.username}" if user.username else "нет"
-        except:
-            user_name = "Неизвестно"
-            username = "нет"
-        
-        reports_text += f"🆔 ID репорта: {report_id}\n"
-        reports_text += f"👤 От: {user_name} ({username})\n"
-        reports_text += f"📅 Дата: {report_date}\n"
-        reports_text += f"📝 Сообщение: {message[:50]}...\n\n"
-        
-        keyboard = InlineKeyboardBuilder()
-        keyboard.add(InlineKeyboardButton(text="✉️ Ответить", callback_data=f"answer_report_{report_id}"))
-        keyboard.add(InlineKeyboardButton(text="🚫 Забанить", callback_data=f"ban_{user_id}"))
-        keyboard.add(InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_report_{report_id}"))
-        keyboard.adjust(1)
-        
-        await message.answer(reports_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
-        reports_text = ""
-    
-    # Добавляем навигацию
-    nav_keyboard = create_navigation_keyboard(page, total_pages, "admin_reports", "reports_")
-    await message.answer("Навигация по репортам:", reply_markup=nav_keyboard.as_markup())
-
-@dp.callback_query(F.data == "open_reports")
-async def open_reports_callback(callback: CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("❌ У вас нет доступа.")
-        return
-    
-    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) FROM reports WHERE status = "open"')
-    total_reports = cursor.fetchone()[0]
-    items_per_page = 5
-    total_pages = (total_reports + items_per_page - 1) // items_per_page
-    
-    cursor.execute('''
-        SELECT report_id, user_id, message, report_date 
-        FROM reports 
-        WHERE status = "open"
-        ORDER BY report_date DESC 
-        LIMIT ? OFFSET ?
-    ''', (items_per_page, 0))
-    reports = cursor.fetchall()
-    conn.close()
-    
-    if not reports:
-        await callback.message.answer("❌ Нет открытых репортов.")
-        await callback.answer()
-        return
-    
-    await state.update_data(
-        reports_page=0,
-        total_pages=total_pages,
-        reports_type="open"
-    )
-    await show_reports_page(callback.message, state, reports, 0, total_pages)
-    await callback.answer()
-
-async def show_reports_page(message: Message, state: FSMContext, reports: list, page: int, total_pages: int):
-    data = await state.get_data()
-    reports_type = data.get("reports_type", "open")
-    
-    title = "📜 Открытые репорты" if reports_type == "open" else "📂 Закрытые репорты"
-    
-    for report in reports:
-        report_id, user_id, message_text, report_date = report
-        
-        try:
-            user = await bot.get_chat(user_id)
-            user_name = user.full_name
-            username = f"@{user.username}" if user.username else "нет"
-        except:
-            user_name = "Неизвестно"
-            username = "нет"
-        
-        report_text = f"""
-{title} (Страница {page+1}/{total_pages})
-
-🆔 ID репорта: {report_id}
-👤 От: {user_name} ({username})
-📅 Дата: {report_date}
-📝 Сообщение: {message_text[:200]}...
-"""
-        
-        keyboard = InlineKeyboardBuilder()
-        
-        if reports_type == "open":
-            keyboard.add(InlineKeyboardButton(
-                text="✉️ Ответить", 
-                callback_data=f"answer_report_{report_id}"
-            ))
-            keyboard.add(InlineKeyboardButton(
-                text="🚫 Забанить", 
-                callback_data=f"ban_{user_id}"
-            ))
-        else:
-            # Для закрытых репортов показываем ответ
-            conn = sqlite3.connect('/root/bot_mirrozz_database.db')
-            cursor = conn.cursor()
-            cursor.execute(
-                'SELECT answer, answered_by, answer_date FROM reports WHERE report_id = ?',
-                (report_id,)
-            )
-            answer, answered_by, answer_date = cursor.fetchone()
-            conn.close()
-            
-            try:
-                admin = await bot.get_chat(answered_by)
-                admin_name = admin.full_name
-            except:
-                admin_name = "Неизвестно"
-            
-            report_text += f"""
-            
-📩 Ответ администратора:
-👮 От: {admin_name}
-📅 Дата: {answer_date}
-💬 Текст: {answer[:200]}...
-"""
-        
-        keyboard.add(InlineKeyboardButton(
-            text="🗑 Удалить", 
-            callback_data=f"delete_report_{report_id}"
-        ))
-        
-        keyboard.adjust(2)
-        
-        await message.answer(
-            report_text,
-            reply_markup=keyboard.as_markup(),
-            parse_mode=ParseMode.HTML
-        )
-    
-    # Кнопки навигации
-    nav_keyboard = InlineKeyboardBuilder()
-    
-    if page > 0:
-        nav_keyboard.add(InlineKeyboardButton(
-            text="⬅️ Назад", 
-            callback_data=f"reports_prev_{page}_{reports_type}"
-        ))
-    
-    if page < total_pages - 1:
-        nav_keyboard.add(InlineKeyboardButton(
-            text="Вперед ➡️", 
-            callback_data=f"reports_next_{page}_{reports_type}"
-        ))
-    
-    nav_keyboard.add(InlineKeyboardButton(
-        text="🔙 Назад", 
-        callback_data="admin_reports"
-    ))
-    
-    nav_keyboard.adjust(2)
-    
-    await message.answer(
-        "Навигация по репортам:",
-        reply_markup=nav_keyboard.as_markup()
-    )
 
 # Обработчики навигации для списка репортов
 @dp.callback_query(F.data.startswith("reports_prev_"))
@@ -1834,20 +1613,102 @@ async def reports_last_callback(callback: CallbackQuery, state: FSMContext):
     await show_reports_page(callback.message, state, reports, page, total_pages)
     await callback.answer()
 
-# Answer report callback
-@dp.callback_query(F.data.startswith("answer_report_"))
-async def answer_report_callback(callback: CallbackQuery, state: FSMContext):
-    report_id = int(callback.data.split('_')[2])
+# В admin_reports_callback измените клавиатуру:
+@dp.callback_query(F.data == "admin_reports")
+async def admin_reports_callback(callback: CallbackQuery):
+    keyboard = InlineKeyboardBuilder()
+    keyboard.add(InlineKeyboardButton(text="📜 Открытые репорты", callback_data="open_reports"))
+    keyboard.add(InlineKeyboardButton(text="📂 Закрытые репорты", callback_data="closed_reports"))
+    keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back"))
+    await callback.message.edit_text("⚠️ Управление репортами", reply_markup=keyboard.as_markup())
+
+# Унифицированный обработчик для открытых/закрытых репортов
+@dp.callback_query(F.data.in_(["open_reports", "closed_reports"]))
+async def show_reports(callback: CallbackQuery, state: FSMContext):
+    report_type = "open" if callback.data == "open_reports" else "closed"
     
-    await state.update_data(current_report_id=report_id)
-    await callback.message.answer(
-        "✉️ Введите ответ на репорт:",
-        reply_markup=InlineKeyboardBuilder()
-            .add(InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_reply"))
-            .as_markup()
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM reports WHERE status = ?', (report_type,))
+    total = cursor.fetchone()[0]
+    
+    cursor.execute('''
+        SELECT report_id, user_id, message, report_date 
+        FROM reports 
+        WHERE status = ?
+        ORDER BY report_date DESC 
+        LIMIT 5 OFFSET 0
+    ''', (report_type,))
+    reports = cursor.fetchall()
+    conn.close()
+    
+    await state.update_data(
+        reports_page=0,
+        total_pages=(total + 4) // 5,  # 5 items per page
+        reports_type=report_type
     )
-    await state.set_state(Form.answer_report)
-    await callback.answer()
+    
+    await show_reports_page(callback.message, state, reports, 0, (total + 4) // 5)
+
+# Улучшенная функция показа страницы с репортами
+async def show_reports_page(message: Message, state: FSMContext, reports: list, page: int, total_pages: int):
+    data = await state.get_data()
+    report_type = data["reports_type"]
+    
+    if not reports:
+        await message.edit_text(f"❌ Нет {report_type} репортов.")
+        return
+    
+    for report in reports:
+        report_id, user_id, message_text, report_date = report
+        
+        try:
+            user = await bot.get_chat(user_id)
+            user_info = f"{user.full_name} (@{user.username})" if user.username else user.full_name
+        except:
+            user_info = "Неизвестный пользователь"
+        
+        text = f"""
+📋 Репорт #{report_id} ({'открыт' if report_type == 'open' else 'закрыт'})
+👤 От: {user_info}
+📅 Дата: {report_date}
+📝 Сообщение: {message_text[:200]}...
+"""
+        keyboard = InlineKeyboardBuilder()
+        
+        if report_type == "open":
+            keyboard.add(InlineKeyboardButton(
+                text="✉️ Ответить", 
+                callback_data=f"answer_report_{report_id}"
+            ))
+            keyboard.add(InlineKeyboardButton(
+                text="🚫 Забанить", 
+                callback_data=f"ban_{user_id}"
+            ))
+        
+        keyboard.add(InlineKeyboardButton(
+            text="🗑 Удалить", 
+            callback_data=f"delete_report_{report_id}"
+        ))
+        
+        await message.answer(text, reply_markup=keyboard.as_markup())
+
+    # Кнопки навигации
+    if total_pages > 1:
+        nav_keyboard = InlineKeyboardBuilder()
+        if page > 0:
+            nav_keyboard.add(InlineKeyboardButton(
+                text="⬅️ Назад", 
+                callback_data=f"reports_prev_{page}_{report_type}"
+            ))
+        
+        if page < total_pages - 1:
+            nav_keyboard.add(InlineKeyboardButton(
+                text="Вперед ➡️", 
+                callback_data=f"reports_next_{page}_{report_type}"
+            ))
+        
+        await message.answer("Страница {page+1}/{total_pages}", reply_markup=nav_keyboard.as_markup())
 
 @dp.message(Form.answer_report)
 async def answer_report_handler(message: Message, state: FSMContext):
