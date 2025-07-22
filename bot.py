@@ -314,21 +314,26 @@ def is_banned(user_id: int) -> bool:
     return result and result[0] == 1
 
 async def check_subscription(user_id: int, check_type: int = 1) -> bool:
-    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT channel_id FROM advertise_channels WHERE check_type = ?', (check_type,))
-    channels = cursor.fetchall()
-    conn.close()
-    
-    for channel in channels:
-        channel_id = channel[0]
-        try:
-            member = await bot.get_chat_member(channel_id, user_id)
-            if member.status not in ['member', 'administrator', 'creator']:
+    try:
+        conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+        cursor = conn.cursor()
+        cursor.execute('SELECT channel_id FROM advertise_channels WHERE check_type = ?', (check_type,))
+        channels = cursor.fetchall()
+        conn.close()
+        
+        for channel in channels:
+            channel_id = channel[0]
+            try:
+                member = await bot.get_chat_member(channel_id, user_id)
+                if member.status not in ['member', 'administrator', 'creator']:
+                    return False
+            except Exception as e:
+                logger.error(f"Error checking subscription for user {user_id} in channel {channel_id}: {str(e)}")
                 return False
-        except:
-            return False
-    return True
+        return True
+    except Exception as e:
+        logger.error(f"Database error in check_subscription: {str(e)}")
+        return False
 
 # Добавим глобальную переменную для хранения времени последней успешной проверки
 LAST_SUBSCRIPTION_CHECK = {}
@@ -393,102 +398,6 @@ async def subgram_check_callback(callback: CallbackQuery):
             await callback.answer("Пожалуйста, подпишитесь на все каналы")
     except Exception as e:
         log_event('ERROR', f"Error in subgram_check_callback: {str(e)}")
-        await callback.answer("❌ Произошла ошибка при проверке подписки")
-
-@dp.callback_query(F.data.startswith("subgram_check_"))
-async def subgram_check_with_message_callback(callback: CallbackQuery):
-    message_id = callback.data.split('_')[2]
-    user_id = callback.from_user.id
-    current_time = time.time()
-    
-    try:
-        # Проверяем, была ли успешная проверка подписки в последний час
-        if user_id in LAST_SUBSCRIPTION_CHECK and (current_time - LAST_SUBSCRIPTION_CHECK[user_id]) < 3600:
-            await callback.message.delete()
-            return
-            
-        # Меняем текст кнопки на "Проверяю статус подписки..."
-        await callback.message.edit_text("Проверяю статус подписки...")
-        
-        # Проверяем подписки
-        subgram_response = await check_subgram_subscription(
-            user_id=user_id,
-            chat_id=callback.message.chat.id,
-            first_name=callback.from_user.first_name,
-            language_code=callback.from_user.language_code,
-            premium=callback.from_user.is_premium
-        )
-        
-        if subgram_response.get('status') == 'ok':
-            # Сохраняем время успешной проверки
-            LAST_SUBSCRIPTION_CHECK[user_id] = current_time
-            
-            # Удаляем сообщение с каналами
-            await callback.message.delete()
-            
-            # Отправляем временное сообщение об успешной проверке
-            msg = await callback.message.answer("✅ Вы успешно прошли проверку подписки!")
-            
-            # Удаляем сообщение через 3 секунды
-            await asyncio.sleep(3)
-            await msg.delete()
-            
-            # Получаем оригинальное сообщение и обрабатываем его
-            try:
-                original_message = await bot.get_message(callback.message.chat.id, message_id)
-                if original_message.text.startswith('/start'):
-                    # Если это была команда /start с ссылкой, обрабатываем ссылку
-                    link_id = original_message.text.split()[1]
-                    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
-                    cursor = conn.cursor()
-                    cursor.execute('SELECT * FROM links WHERE link_id = ?', (link_id,))
-                    link = cursor.fetchone()
-                    
-                    if link:
-                        cursor.execute('UPDATE links SET visits = visits + 1 WHERE link_id = ?', (link_id,))
-                        cursor.execute('UPDATE users SET link_visits = link_visits + 1 WHERE user_id = ?', (user_id,))
-                        conn.commit()
-                        
-                        content_type = link[1]
-                        content_text = link[2]
-                        content_file_id = link[3]
-                        
-                        if content_type == 'text':
-                            await original_message.answer(content_text)
-                        elif content_type == 'photo':
-                            await original_message.answer_photo(content_file_id, caption=content_text)
-                        elif content_type == 'document':
-                            await original_message.answer_document(content_file_id, caption=content_text)
-                        
-                        conn.close()
-                else:
-                    # Если это была другая команда (/help, /user_stats и т.д.), просто выполняем её
-                    await original_message.answer(original_message.text)
-            except:
-                pass
-        else:
-            # Обновляем сообщение с новыми каналами
-            keyboard = InlineKeyboardBuilder()
-            keyboard.add(InlineKeyboardButton(text="✅ Я выполнил", callback_data=f"subgram_check_{message_id}"))
-            
-            channels_text = """📢 Проверка подписки
-
-Подпишитесь на каналы выше, затем нажмите на кнопку "Я выполнил" ✅
-
-После этого нажмите сюда ⬇
-"""
-            if 'links' in subgram_response:
-                for link in subgram_response['links']:
-                    channels_text += f"\n• {link}"
-            elif 'additional' in subgram_response and 'sponsors' in subgram_response['additional']:
-                for sponsor in subgram_response['additional']['sponsors']:
-                    if sponsor['status'] != 'subscribed':
-                        channels_text += f"\n• {sponsor['link']} - {sponsor['resource_name'] or 'Канал'}"
-            
-            await callback.message.edit_text(channels_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
-            await callback.answer("Пожалуйста, подпишитесь на все каналы")
-    except Exception as e:
-        log_event('ERROR', f"Error in subgram_check_with_message_callback: {str(e)}")
         await callback.answer("❌ Произошла ошибка при проверке подписки")
 
 @dp.callback_query(F.data.startswith("subgram_check_"))
@@ -1607,7 +1516,6 @@ async def admins_last_callback(callback: CallbackQuery, state: FSMContext):
 async def no_action_callback(callback: CallbackQuery):
     await callback.answer()
 
-# Admin reports callback
 # Admin reports callback - измененная версия
 @dp.callback_query(F.data == "admin_reports")
 async def admin_reports_callback(callback: CallbackQuery):
@@ -1626,6 +1534,9 @@ async def admin_reports_callback(callback: CallbackQuery):
     await callback.answer()
 
 # All reports callback - модифицированная версия
+
+
+
 @dp.callback_query(F.data == "all_reports")
 async def all_reports_callback(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
@@ -1690,46 +1601,195 @@ async def show_reports_page(message: Message, state: FSMContext, reports: list, 
     nav_keyboard = create_navigation_keyboard(page, total_pages, "admin_reports", "reports_")
     await message.answer("Навигация по репортам:", reply_markup=nav_keyboard.as_markup())
 
+@dp.callback_query(F.data == "open_reports")
+async def open_reports_callback(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа.")
+        return
+    
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM reports WHERE status = "open"')
+    total_reports = cursor.fetchone()[0]
+    items_per_page = 5
+    total_pages = (total_reports + items_per_page - 1) // items_per_page
+    
+    cursor.execute('''
+        SELECT report_id, user_id, message, report_date 
+        FROM reports 
+        WHERE status = "open"
+        ORDER BY report_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (items_per_page, 0))
+    reports = cursor.fetchall()
+    conn.close()
+    
+    if not reports:
+        await callback.message.answer("❌ Нет открытых репортов.")
+        await callback.answer()
+        return
+    
+    await state.update_data(
+        reports_page=0,
+        total_pages=total_pages,
+        reports_type="open"
+    )
+    await show_reports_page(callback.message, state, reports, 0, total_pages)
+    await callback.answer()
+
+async def show_reports_page(message: Message, state: FSMContext, reports: list, page: int, total_pages: int):
+    data = await state.get_data()
+    reports_type = data.get("reports_type", "open")
+    
+    title = "📜 Открытые репорты" if reports_type == "open" else "📂 Закрытые репорты"
+    
+    for report in reports:
+        report_id, user_id, message_text, report_date = report
+        
+        try:
+            user = await bot.get_chat(user_id)
+            user_name = user.full_name
+            username = f"@{user.username}" if user.username else "нет"
+        except:
+            user_name = "Неизвестно"
+            username = "нет"
+        
+        report_text = f"""
+{title} (Страница {page+1}/{total_pages})
+
+🆔 ID репорта: {report_id}
+👤 От: {user_name} ({username})
+📅 Дата: {report_date}
+📝 Сообщение: {message_text[:200]}...
+"""
+        
+        keyboard = InlineKeyboardBuilder()
+        
+        if reports_type == "open":
+            keyboard.add(InlineKeyboardButton(
+                text="✉️ Ответить", 
+                callback_data=f"answer_report_{report_id}"
+            ))
+            keyboard.add(InlineKeyboardButton(
+                text="🚫 Забанить", 
+                callback_data=f"ban_{user_id}"
+            ))
+        else:
+            # Для закрытых репортов показываем ответ
+            conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+            cursor = conn.cursor()
+            cursor.execute(
+                'SELECT answer, answered_by, answer_date FROM reports WHERE report_id = ?',
+                (report_id,)
+            )
+            answer, answered_by, answer_date = cursor.fetchone()
+            conn.close()
+            
+            try:
+                admin = await bot.get_chat(answered_by)
+                admin_name = admin.full_name
+            except:
+                admin_name = "Неизвестно"
+            
+            report_text += f"""
+            
+📩 Ответ администратора:
+👮 От: {admin_name}
+📅 Дата: {answer_date}
+💬 Текст: {answer[:200]}...
+"""
+        
+        keyboard.add(InlineKeyboardButton(
+            text="🗑 Удалить", 
+            callback_data=f"delete_report_{report_id}"
+        ))
+        
+        keyboard.adjust(2)
+        
+        await message.answer(
+            report_text,
+            reply_markup=keyboard.as_markup(),
+            parse_mode=ParseMode.HTML
+        )
+    
+    # Кнопки навигации
+    nav_keyboard = InlineKeyboardBuilder()
+    
+    if page > 0:
+        nav_keyboard.add(InlineKeyboardButton(
+            text="⬅️ Назад", 
+            callback_data=f"reports_prev_{page}_{reports_type}"
+        ))
+    
+    if page < total_pages - 1:
+        nav_keyboard.add(InlineKeyboardButton(
+            text="Вперед ➡️", 
+            callback_data=f"reports_next_{page}_{reports_type}"
+        ))
+    
+    nav_keyboard.add(InlineKeyboardButton(
+        text="🔙 Назад", 
+        callback_data="admin_reports"
+    ))
+    
+    nav_keyboard.adjust(2)
+    
+    await message.answer(
+        "Навигация по репортам:",
+        reply_markup=nav_keyboard.as_markup()
+    )
+
 # Обработчики навигации для списка репортов
 @dp.callback_query(F.data.startswith("reports_prev_"))
 async def reports_prev_callback(callback: CallbackQuery, state: FSMContext):
-    page = int(callback.data.split('_')[2]) - 1
-    data = await state.get_data()
-    total_pages = data['total_pages']
+    parts = callback.data.split('_')
+    page = int(parts[2]) - 1
+    reports_type = parts[3]
     
-    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT report_id, user_id, message, report_date, status 
-        FROM reports 
-        ORDER BY report_date DESC 
-        LIMIT ? OFFSET ?
-    ''', (10, page * 10))
-    reports = cursor.fetchall()
-    conn.close()
-    
-    await state.update_data(reports_page=page)
-    await show_reports_page(callback.message, state, reports, page, total_pages)
-    await callback.answer()
+    await process_reports_page(callback, state, page, reports_type)
 
 @dp.callback_query(F.data.startswith("reports_next_"))
 async def reports_next_callback(callback: CallbackQuery, state: FSMContext):
-    page = int(callback.data.split('_')[2]) + 1
-    data = await state.get_data()
-    total_pages = data['total_pages']
+    parts = callback.data.split('_')
+    page = int(parts[2]) + 1
+    reports_type = parts[3]
     
+    await process_reports_page(callback, state, page, reports_type)
+
+async def process_reports_page(callback: CallbackQuery, state: FSMContext, page: int, reports_type: str):
     conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
-    cursor.execute('''
-        SELECT report_id, user_id, message, report_date, status 
+    
+    cursor.execute(
+        f'SELECT COUNT(*) FROM reports WHERE status = ?',
+        ("open" if reports_type == "open" else "closed",)
+    )
+    total_reports = cursor.fetchone()[0]
+    items_per_page = 5
+    total_pages = (total_reports + items_per_page - 1) // items_per_page
+    
+    cursor.execute(
+        f'''
+        SELECT report_id, user_id, message, report_date 
         FROM reports 
+        WHERE status = ?
         ORDER BY report_date DESC 
         LIMIT ? OFFSET ?
-    ''', (10, page * 10))
+        ''',
+        ("open" if reports_type == "open" else "closed", items_per_page, page * items_per_page)
+    )
     reports = cursor.fetchall()
     conn.close()
     
-    await state.update_data(reports_page=page)
+    await state.update_data(
+        reports_page=page,
+        total_pages=total_pages,
+        reports_type=reports_type
+    )
+    
+    # Удаляем предыдущие сообщения
+    await callback.message.delete()
+    
     await show_reports_page(callback.message, state, reports, page, total_pages)
     await callback.answer()
 
@@ -1777,127 +1837,127 @@ async def reports_last_callback(callback: CallbackQuery, state: FSMContext):
 # Answer report callback
 @dp.callback_query(F.data.startswith("answer_report_"))
 async def answer_report_callback(callback: CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("❌ У вас нет доступа.")
-        return
-    
     report_id = int(callback.data.split('_')[2])
-    await state.update_data(report_id=report_id)
-    await callback.message.answer("✉️ Введите ответ на репорт:")
+    
+    await state.update_data(current_report_id=report_id)
+    await callback.message.answer(
+        "✉️ Введите ответ на репорт:",
+        reply_markup=InlineKeyboardBuilder()
+            .add(InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_reply"))
+            .as_markup()
+    )
     await state.set_state(Form.answer_report)
     await callback.answer()
 
-# Answer report handler
 @dp.message(Form.answer_report)
 async def answer_report_handler(message: Message, state: FSMContext):
     data = await state.get_data()
-    report_id = data['report_id']
+    report_id = data['current_report_id']
     answer_text = message.text
     
     conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT user_id FROM reports WHERE report_id = ?', (report_id,))
+    
+    # Получаем информацию о репорте
+    cursor.execute(
+        'SELECT user_id FROM reports WHERE report_id = ?',
+        (report_id,)
+    )
     user_id = cursor.fetchone()[0]
     
+    # Обновляем репорт
     cursor.execute(
-        'UPDATE reports SET status = "closed", answer = ?, answered_by = ?, answer_date = ? WHERE report_id = ?',
+        '''
+        UPDATE reports 
+        SET answer = ?, answered_by = ?, answer_date = ?, status = 'closed'
+        WHERE report_id = ?
+        ''',
         (answer_text, message.from_user.id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), report_id)
     )
     conn.commit()
     conn.close()
     
+    # Отправляем ответ пользователю
     try:
-        user = await bot.get_chat(user_id)
         await bot.send_message(
             user_id,
-            f"📩 Ответ на ваш репорт #{report_id}:\n\n{answer_text}\n\nАдминистратор: {message.from_user.full_name}"
+            f"📩 Ответ на ваш репорт #{report_id}:\n\n{answer_text}\n\n"
+            f"Администратор: {message.from_user.full_name}"
         )
-    except:
-        pass
+    except Exception as e:
+        log_event('ERROR', f"Не удалось отправить ответ пользователю {user_id}: {str(e)}")
     
-    await message.answer(f"✅ Ответ на репорт #{report_id} отправлен.")
+    await message.answer(
+        f"✅ Ответ на репорт #{report_id} отправлен.",
+        reply_markup=InlineKeyboardBuilder()
+            .add(InlineKeyboardButton(text="📜 К списку репортов", callback_data="open_reports"))
+            .as_markup()
+    )
     await state.clear()
-    log_event('INFO', f"Admin {message.from_user.id} answered report #{report_id}")
 
-# Delete report callback - с пагинацией
-@dp.callback_query(F.data == "delete_report")
-async def delete_report_callback(callback: CallbackQuery, state: FSMContext):
+@dp.callback_query(F.data == "closed_reports")
+async def closed_reports_callback(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer("❌ У вас нет доступа.")
         return
     
     conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT report_id, user_id, message, report_date FROM reports ORDER BY report_date DESC')
+    cursor.execute('SELECT COUNT(*) FROM reports WHERE status = "closed"')
+    total_reports = cursor.fetchone()[0]
+    items_per_page = 5
+    total_pages = (total_reports + items_per_page - 1) // items_per_page
+    
+    cursor.execute('''
+        SELECT report_id, user_id, message, report_date 
+        FROM reports 
+        WHERE status = "closed"
+        ORDER BY report_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (items_per_page, 0))
     reports = cursor.fetchall()
     conn.close()
     
     if not reports:
-        await callback.message.answer("❌ Нет репортов для удаления.")
+        await callback.message.answer("❌ Нет закрытых репортов.")
         await callback.answer()
         return
     
-    await state.update_data(reports=reports, report_index=0)
-    await show_report_for_deletion(callback.message, state, 0)
+    await state.update_data(
+        reports_page=0,
+        total_pages=total_pages,
+        reports_type="closed"
+    )
+    await show_reports_page(callback.message, state, reports, 0, total_pages)
     await callback.answer()
 
-async def show_report_for_deletion(message: Message, state: FSMContext, index: int):
-    data = await state.get_data()
-    reports = data['reports']
-    if index < 0 or index >= len(reports):
-        await message.answer("❌ Репорты закончились.")
-        return
-    
-    report = reports[index]
-    report_id, user_id, message_text, report_date = report
-    
-    try:
-        user = await bot.get_chat(user_id)
-        user_name = user.full_name
-        username = f"@{user.username}" if user.username else "нет"
-    except:
-        user_name = "Неизвестно"
-        username = "нет"
-    
-    text = f"""
-{hbold('⚠️ Репорт для удаления')}
-
-🆔 ID репорта: {report_id}
-👤 От: {user_name} ({username})
-📅 Дата: {report_date}
-📝 Сообщение: {message_text[:50]}...
-"""
-    
-    keyboard = InlineKeyboardBuilder()
-    keyboard.add(InlineKeyboardButton(text="🗑 Удалить", callback_data=f"confirm_delete_report_{report_id}"))
-    if index > 0:
-        keyboard.add(InlineKeyboardButton(text="⬅️ Предыдущий", callback_data=f"prev_report_{index}"))
-    if index < len(reports) - 1:
-        keyboard.add(InlineKeyboardButton(text="➡️ Следующий", callback_data=f"next_report_{index}"))
-    keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="admin_reports"))
-    
-    keyboard.adjust(1)
-    
-    await message.edit_text(text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
-
-@dp.callback_query(F.data.startswith("prev_report_"))
-async def prev_report_callback(callback: CallbackQuery, state: FSMContext):
-    index = int(callback.data.split('_')[2]) - 1
-    await show_report_for_deletion(callback.message, state, index)
-    await callback.answer()
-
-@dp.callback_query(F.data.startswith("next_report_"))
-async def next_report_callback(callback: CallbackQuery, state: FSMContext):
-    index = int(callback.data.split('_')[2]) + 1
-    await show_report_for_deletion(callback.message, state, index)
-    await callback.answer()
-
-@dp.callback_query(F.data.startswith("confirm_delete_report_"))
-async def confirm_delete_report_callback(callback: CallbackQuery):
+# Delete report callback - с пагинацией
+@dp.callback_query(F.data.startswith("delete_report_"))
+async def delete_report_callback(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer("❌ У вас нет доступа.")
         return
     
+    report_id = int(callback.data.split('_')[2])
+    
+    keyboard = InlineKeyboardBuilder()
+    keyboard.add(InlineKeyboardButton(
+        text="✅ Да, удалить", 
+        callback_data=f"confirm_delete_report_{report_id}"
+    ))
+    keyboard.add(InlineKeyboardButton(
+        text="❌ Нет, отмена", 
+        callback_data="cancel_delete"
+    ))
+    
+    await callback.message.edit_text(
+        f"⚠️ Вы уверены, что хотите удалить репорт #{report_id}?",
+        reply_markup=keyboard.as_markup()
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("confirm_delete_report_"))
+async def confirm_delete_report_callback(callback: CallbackQuery):
     report_id = int(callback.data.split('_')[3])
     
     conn = sqlite3.connect('/root/bot_mirrozz_database.db')
@@ -1906,9 +1966,13 @@ async def confirm_delete_report_callback(callback: CallbackQuery):
     conn.commit()
     conn.close()
     
-    await callback.message.answer(f"✅ Репорт #{report_id} удалён.")
+    await callback.message.edit_text(f"✅ Репорт #{report_id} удалён.")
     await callback.answer()
-    log_event('INFO', f"Admin {callback.from_user.id} deleted report #{report_id}")
+
+@dp.callback_query(F.data == "cancel_delete")
+async def cancel_delete_callback(callback: CallbackQuery):
+    await callback.message.delete()
+    await callback.answer("❌ Удаление отменено.")
 
 # Report list callback - измененная версия с пагинацией
 @dp.callback_query(F.data == "report_list")
@@ -2688,6 +2752,7 @@ async def admin_developer_callback(callback: CallbackQuery):
     log_event('INFO', f"Developer {callback.from_user.id} accessed developer panel")
 
 # Developer database callback - с кнопкой назад
+# Улучшенная панель разработчика
 @dp.callback_query(F.data == "developer_database")
 async def developer_database_callback(callback: CallbackQuery):
     if not is_developer(callback.from_user.id):
@@ -2696,14 +2761,56 @@ async def developer_database_callback(callback: CallbackQuery):
     
     keyboard = InlineKeyboardBuilder()
     keyboard.add(InlineKeyboardButton(text="⬇️ Скачать базу", callback_data="download_database"))
+    keyboard.add(InlineKeyboardButton(text="ℹ️ Информация", callback_data="database_info"))
     keyboard.add(InlineKeyboardButton(text="🔄 Сбросить базу", callback_data="reset_database"))
-    keyboard.add(InlineKeyboardButton(text="📅 Последнее обновление", callback_data="last_database_update"))
     keyboard.add(InlineKeyboardButton(text="📤 Загрузить базу", callback_data="load_database"))
     keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="admin_developer"))
     
     keyboard.adjust(2)
     
     await callback.message.edit_text(f"{hbold('💾 Управление базой данных')}", reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
+    await callback.answer()
+
+# Новая функция - информация о базе данных
+@dp.callback_query(F.data == "database_info")
+async def database_info_callback(callback: CallbackQuery):
+    if not is_developer(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа.")
+        return
+    
+    try:
+        conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+        cursor = conn.cursor()
+        
+        # Получаем информацию о таблицах
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = cursor.fetchall()
+        
+        info_text = f"{hbold('ℹ️ Информация о базе данных')}\n\n"
+        info_text += f"📊 Всего таблиц: {len(tables)}\n\n"
+        
+        # Получаем размер базы данных
+        db_size = os.path.getsize('/root/bot_mirrozz_database.db') / (1024 * 1024)  # в MB
+        
+        info_text += f"📦 Размер базы: {db_size:.2f} MB\n\n"
+        
+        # Получаем количество записей в основных таблицах
+        for table in tables:
+            table_name = table[0]
+            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+            count = cursor.fetchone()[0]
+            info_text += f"• {table_name}: {count} записей\n"
+        
+        conn.close()
+        
+        keyboard = InlineKeyboardBuilder()
+        keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="developer_database"))
+        
+        await callback.message.edit_text(info_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
+        
+    except Exception as e:
+        await callback.message.edit_text(f"❌ Ошибка при получении информации: {str(e)}")
+    
     await callback.answer()
 
 # Developer messages callback - с кнопкой назад
@@ -2810,17 +2917,29 @@ async def developer_server_callback(callback: CallbackQuery):
     
     await callback.answer()
 
-# Download database callback
+# Улучшенное скачивание базы данных
 @dp.callback_query(F.data == "download_database")
 async def download_database_callback(callback: CallbackQuery):
     if not is_developer(callback.from_user.id):
         await callback.answer("❌ У вас нет доступа.")
         return
     
-    db_file = FSInputFile('bot_mirrozz_database.db', filename='bot_mirrozz_database.db')
-    await callback.message.answer_document(db_file, caption="📦 Резервная копия базы данных")
-    await callback.answer()
-    log_event('INFO', f"Developer {callback.from_user.id} downloaded database")
+    try:
+        # Создаем временную копию базы для безопасности
+        temp_db = f"bot_mirrozz_database_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+        shutil.copyfile('/root/bot_mirrozz_database.db', temp_db)
+        
+        db_file = FSInputFile(temp_db, filename='bot_mirrozz_database.db')
+        await callback.message.answer_document(db_file, caption="📦 Резервная копия базы данных")
+        
+        # Удаляем временный файл после отправки
+        os.remove(temp_db)
+        
+        await callback.answer()
+        log_event('INFO', f"Developer {callback.from_user.id} downloaded database")
+    except Exception as e:
+        await callback.message.answer(f"❌ Ошибка при создании резервной копии: {str(e)}")
+        await callback.answer()
 
 # Reset database callback
 @dp.callback_query(F.data == "reset_database")
