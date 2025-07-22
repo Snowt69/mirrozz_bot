@@ -413,7 +413,7 @@ async def subgram_check_callback(callback: CallbackQuery, state: FSMContext):
                     if sponsor['status'] != 'subscribed':
                         channels_text += f"• {sponsor['link']}\n"
             
-            channels_text += "\nПодпишитесь и нажмите кнопку ниже:"
+            channels_text += "📢 Для использования бота подпишитесь на каналы, нажмите на кнопку 'Я выполнил' и затем нажмите на кнопку ниже ↓\n"
             
             # 9. Создаем новую кнопку
             keyboard = InlineKeyboardBuilder()
@@ -472,7 +472,7 @@ async def cmd_start(message: Message, state: FSMContext):
                 callback_data="subgram_check"
             ))
             
-            channels_text = "📢 Для использования бота подпишитесь на каналы, затем нажмите на кнопку ниже ↓\n\n"
+            channels_text = "📢 Для использования бота подпишитесь на каналы, нажмите на кнопку 'Я выполнил' и затем нажмите на кнопку ниже ↓\n\n"
             if 'links' in subgram_response:
                 for link in subgram_response['links']:
                     channels_text += f"• {link}\n"
