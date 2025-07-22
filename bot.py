@@ -556,34 +556,6 @@ async def subgram_check_with_message_callback(callback: CallbackQuery):
         log_event('ERROR', f"Error in subgram_check_with_message_callback: {str(e)}")
         await callback.answer("❌ Произошла ошибка при проверке подписки")
 
-async def show_welcome(message: Message):
-    user = message.from_user
-    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) FROM users')
-    user_count = cursor.fetchone()[0]
-    conn.close()
-    
-    welcome_text = f"""
-# Привет, <b>{user.first_name}</b> 👋
-
-Я Mirrozz Scripts — бот, который выдает актуальные скрипты и инжекторы для Roblox по ссылке! 🚀
-
-<b>Почему я лучший?</b>
-- <b>Актуальные скрипты</b> — база обновляется регулярно!
-- <b>Мгновенный доступ</b> — получай скрипты в пару кликов!
-- <b>Надежное хранение</b> — твои скрипты всегда под рукой!
-- <b>Стабильная работа</b> — бот на мощном сервере, без сбоев!
-"""
-    if is_admin(user.id):
-        welcome_text += f"\n\n<b>👑 Вы администратор бота!</b>\nДоступ к админ-панели: /admin"
-    if is_developer(user.id):
-        welcome_text += f"\n\n<b>💻 Вы разработчик бота!</b>\nДоступ к панели разработчика: /admin"
-    
-    welcome_text += "\n\nНапиши /help, чтобы узнать все команды!"
-    
-    await message.answer(welcome_text, parse_mode=ParseMode.HTML)
-
 @dp.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     start_args = message.text.split()
@@ -598,23 +570,50 @@ async def cmd_start(message: Message, state: FSMContext):
         link_id = start_args[1]
         await state.update_data(link_id=link_id)
         
+        # Первое сообщение с кнопкой "Я выполнил"
         keyboard = InlineKeyboardBuilder()
         keyboard.add(InlineKeyboardButton(
+            text="✅ Я выполнил", 
+            callback_data="verify_subscription_step1"
+        ))
+        
+        # Получаем список каналов от SubGram
+        subgram_response = await check_subgram_subscription(
+            user_id=user.id,
+            chat_id=message.chat.id,
+            first_name=user.first_name
+        )
+        
+        channels_text = "📢 Подпишитесь на каналы:\n\n"
+        if 'links' in subgram_response:
+            for link in subgram_response['links']:
+                channels_text += f"• {link}\n"
+        
+        await message.answer(
+            channels_text,
+            reply_markup=keyboard.as_markup()
+        )
+        
+        # Второе сообщение с кнопкой "Я подписался"
+        keyboard2 = InlineKeyboardBuilder()
+        keyboard2.add(InlineKeyboardButton(
             text="✅ Я подписался", 
-            callback_data="verify_subscription"
+            callback_data="verify_subscription_step2"
         ))
         
         await message.answer(
-            "📢 Проверка подписки\n\n"
-            "Подпишитесь на каналы выше, затем нажмите кнопку ниже ✅\n"
-            "После этого нажмите сюда ⬇",
-            reply_markup=keyboard.as_markup()
+            "После подписки нажмите кнопку ниже:",
+            reply_markup=keyboard2.as_markup()
         )
     else:
         await show_welcome(message)
 
-@dp.callback_query(F.data == "verify_subscription")
-async def verify_subscription(callback: CallbackQuery, state: FSMContext):
+@dp.callback_query(F.data == "verify_subscription_step1")
+async def verify_subscription_step1(callback: CallbackQuery):
+    await callback.answer("Пожалуйста, сначала подпишитесь на все каналы, затем нажмите 'Я подписался'")
+
+@dp.callback_query(F.data == "verify_subscription_step2")
+async def verify_subscription_step2(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     link_id = data.get('link_id')
     
@@ -634,14 +633,11 @@ async def verify_subscription(callback: CallbackQuery, state: FSMContext):
         
         # Отправляем контент ссылки
         await process_link(link_id, callback.message, callback.from_user.id)
-        
-        # Отправляем красивое приветствие после контента
-        await show_welcome(callback.message)
     else:
         keyboard = InlineKeyboardBuilder()
         keyboard.add(InlineKeyboardButton(
             text="✅ Я подписался", 
-            callback_data="verify_subscription"
+            callback_data="verify_subscription_step2"
         ))
         
         channels_text = "📢 Необходимо подписаться на:\n"
@@ -655,6 +651,23 @@ async def verify_subscription(callback: CallbackQuery, state: FSMContext):
         )
     
     await callback.answer()
+
+# Help command handler
+@dp.message(Command('help'))
+async def cmd_help(message: Message):
+    help_text = f"""
+{hbold('📚 Команды Mirrozz Scripts')}
+
+{hbold('/start')} — Начать работу с ботом
+{hbold('/help')} — Показать это сообщение
+{hbold('/user_stats')} — Показать вашу статистику
+{hbold('/report [сообщение]')} — Отправить жалобу администраторам
+"""
+    if is_admin(message.from_user.id):
+        help_text += f"\n{hbold('👑 Админ-команды')}\n{hbold('/admin')} — Открыть админ-панель"
+    
+    await message.answer(help_text, parse_mode=ParseMode.HTML)
+    log_event('INFO', f"User {message.from_user.id} accessed help")
 
 # User stats command handler
 @dp.message(Command('user_stats'))
