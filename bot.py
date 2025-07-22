@@ -347,20 +347,18 @@ def is_banned(user_id: int) -> bool:
 LAST_SUBSCRIPTION_CHECK = {}
 
 @dp.callback_query(F.data.startswith("subgram_check"))
-async def subgram_check_callback(callback: CallbackQuery):
+async def subgram_check_callback(callback: CallbackQuery, state: FSMContext):
     try:
         user_id = callback.from_user.id
         current_time = time.time()
         
-        # Проверяем, была ли успешная проверка подписки в последний час
-        if user_id in LAST_SUBSCRIPTION_CHECK and (current_time - LAST_SUBSCRIPTION_CHECK[user_id]) < 3600:  # 1 час = 3600 секунд
-            await callback.message.delete()
-            return
-            
-        # Меняем текст кнопки на "Проверяю статус подписки..."
-        await callback.message.edit_text("🔄 Проверяю статус подписки...")
+        # 1. Удаляем кнопку "Я подписался"
+        await callback.message.edit_reply_markup(reply_markup=None)
         
-        # Проверяем подписки
+        # 2. Показываем сообщение о проверке
+        checking_msg = await callback.message.answer("🔄 Проверяю ваши подписки...")
+        
+        # 3. Выполняем проверку через SubGram API
         subgram_response = await check_subgram_subscription(
             user_id=user_id,
             chat_id=callback.message.chat.id,
@@ -369,114 +367,44 @@ async def subgram_check_callback(callback: CallbackQuery):
             premium=callback.from_user.is_premium
         )
         
+        # 4. Обрабатываем результат проверки
         if subgram_response.get('status') == 'ok':
-            # Сохраняем время успешной проверки
+            # Успешная проверка
             LAST_SUBSCRIPTION_CHECK[user_id] = current_time
             
-            # Удаляем сообщение с каналами
-            await callback.message.delete()
+            # Удаляем сообщение о проверке
+            await checking_msg.delete()
             
-            # Отправляем временное сообщение об успешной проверке
-            msg = await callback.message.answer("✅ Вы успешно прошли проверку подписки!")
+            # 5. Получаем сохраненные данные из состояния
+            data = await state.get_data()
             
-            # Удаляем сообщение через 3 секунды
-            await asyncio.sleep(3)
-            await msg.delete()
-            
-            # Определяем, нужно ли обрабатывать ссылку или команду
+            # 6. Определяем тип контента для показа
             if hasattr(callback.message, 'text') and callback.message.text.startswith('/start'):
-                # Обработка ссылки из команды /start
+                # Обработка команды /start с ссылкой
                 parts = callback.message.text.split()
                 if len(parts) > 1:
                     link_id = parts[1]
                     await process_link(link_id, callback.message, user_id)
+                else:
+                    await show_welcome(callback.message)
+            elif 'link_id' in data:
+                # Обработка сохраненной ссылки из состояния
+                await process_link(data['link_id'], callback.message, user_id)
+                await state.clear()
             else:
-                # Обработка других команд (/help, /user_stats и т.д.)
-                try:
-                    original_message = await bot.get_message(callback.message.chat.id, callback.message.message_id)
-                    if original_message.text.startswith('/'):
-                        command = original_message.text.split()[0]
-                        if command == '/user_stats':
-                            await cmd_user_stats(original_message)
-                        elif command == '/help':
-                            await cmd_help(original_message)
-                        elif command == '/report':
-                            await cmd_report(original_message)
-                        # Добавьте другие команды по аналогии
-                except Exception as e:
-                    log_event('ERROR', f"Error processing original command: {str(e)}")
+                # Показываем стандартное приветствие
+                await show_welcome(callback.message)
+                
+            # 7. Удаляем оригинальное сообщение с каналами
+            await asyncio.sleep(1)
+            await callback.message.delete()
+            
         else:
-            # Обновляем сообщение с каналами для подписки
-            keyboard = InlineKeyboardBuilder()
+            # Не все подписки оформлены
+            await checking_msg.delete()
             
-            # Определяем callback_data в зависимости от типа сообщения
-            if hasattr(callback.message, 'text') and callback.message.text.startswith('/start'):
-                callback_data = "subgram_check"
-            else:
-                callback_data = f"subgram_check_{callback.message.message_id}"
-            
-            keyboard.add(InlineKeyboardButton(text="✅ Я выполнил", callback_data=callback_data))
-            
-            channels_text = """📢 Проверка подписки
-
-Подпишитесь на каналы выше, затем нажмите на кнопку "Я выполнил" ✅
-
-После этого нажмите сюда ⬇
-"""
-            if 'links' in subgram_response:
-                for link in subgram_response['links']:
-                    channels_text += f"\n• {link}"
-            elif 'additional' in subgram_response and 'sponsors' in subgram_response['additional']:
-                for sponsor in subgram_response['additional']['sponsors']:
-                    if sponsor['status'] != 'subscribed':
-                        channels_text += f"\n• {sponsor['link']} - {sponsor['resource_name'] or 'Канал'}"
-            
-            await callback.message.edit_text(channels_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
-            await callback.answer("Пожалуйста, подпишитесь на все каналы")
-    except Exception as e:
-        log_event('ERROR', f"Error in subgram_check_callback: {str(e)}")
-        await callback.answer("❌ Произошла ошибка при проверке подписки")
-
-@dp.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext):
-    """Улучшенный обработчик команды /start с проверкой подписок"""
-    try:
-        user = message.from_user
-        start_args = message.text.split()
-        
-        # Проверка бана
-        if is_banned(user.id):
-            await message.answer("❌ Вы заблокированы в этом боте.")
-            return
-        
-        # Обновляем статистику пользователя
-        update_user_visit(user.id, user.username, user.first_name, user.last_name)
-        
-        # Для админов/разработчиков пропускаем проверку подписки
-        if is_admin(user.id) or is_developer(user.id):
-            await handle_start_content(message, state, start_args)
-            return
-            
-        # Проверка подписки через SubGram
-        subgram_response = await check_subgram_subscription(
-            user_id=user.id,
-            chat_id=message.chat.id,
-            first_name=user.first_name
-        )
-        
-        if subgram_response.get('status') != 'ok':
-            # Сохраняем данные о ссылке в FSM, если она есть
-            if len(start_args) > 1:
-                await state.update_data(link_id=start_args[1])
-            
-            # Показываем каналы для подписки
-            keyboard = InlineKeyboardBuilder()
-            keyboard.add(InlineKeyboardButton(
-                text="✅ Я подписался", 
-                callback_data="check_subscription"
-            ))
-            
-            channels_text = "📢 Для использования бота подпишитесь на каналы:\n\n"
+            # 8. Формируем новый список каналов
+            channels_text = "❌ Вы не подписаны на все каналы:\n\n"
             if 'links' in subgram_response:
                 for link in subgram_response['links']:
                     channels_text += f"• {link}\n"
@@ -485,12 +413,76 @@ async def cmd_start(message: Message, state: FSMContext):
                     if sponsor['status'] != 'subscribed':
                         channels_text += f"• {sponsor['link']}\n"
             
+            channels_text += "\nПодпишитесь и нажмите кнопку ниже:"
+            
+            # 9. Создаем новую кнопку
+            keyboard = InlineKeyboardBuilder()
+            keyboard.add(InlineKeyboardButton(
+                text="✅ Я подписался", 
+                callback_data="subgram_check"
+            ))
+            
+            # 10. Обновляем сообщение
+            await callback.message.edit_text(
+                channels_text,
+                reply_markup=keyboard.as_markup()
+            )
+            
+            await callback.answer("Пожалуйста, подпишитесь на все каналы")
+            
+    except Exception as e:
+        log_event('ERROR', f"Error in subgram_check_callback: {str(e)}")
+        try:
+            await checking_msg.delete()
+        except:
+            pass
+            
+        await callback.message.answer("❌ Произошла ошибка при проверке подписки. Попробуйте позже.")
+        await callback.answer()
+
+@dp.message(CommandStart())
+async def cmd_start(message: Message, state: FSMContext):
+    try:
+        user = message.from_user
+        
+        if is_banned(user.id):
+            await message.answer("❌ Вы заблокированы в этом боте.")
+            return
+        
+        update_user_visit(user.id, user.username, user.first_name, user.last_name)
+        
+        if is_admin(user.id) or is_developer(user.id):
+            await handle_start_content(message, state, message.text.split())
+            return
+            
+        subgram_response = await check_subgram_subscription(
+            user_id=user.id,
+            chat_id=message.chat.id,
+            first_name=user.first_name
+        )
+        
+        if subgram_response.get('status') != 'ok':
+            start_args = message.text.split()
+            if len(start_args) > 1:
+                await state.update_data(link_id=start_args[1])
+            
+            keyboard = InlineKeyboardBuilder()
+            keyboard.add(InlineKeyboardButton(
+                text="✅ Я подписался", 
+                callback_data="subgram_check"
+            ))
+            
+            channels_text = "📢 Для использования бота подпишитесь на каналы, затем нажмите на кнопку ниже ↓\n\n"
+            if 'links' in subgram_response:
+                for link in subgram_response['links']:
+                    channels_text += f"• {link}\n"
+            
             await message.answer(
                 channels_text,
                 reply_markup=keyboard.as_markup()
             )
         else:
-            await handle_start_content(message, state, start_args)
+            await handle_start_content(message, state, message.text.split())
             
     except Exception as e:
         log_event('ERROR', f"Error in cmd_start: {str(e)}")
