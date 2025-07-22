@@ -1608,6 +1608,7 @@ async def no_action_callback(callback: CallbackQuery):
     await callback.answer()
 
 # Admin reports callback
+# Admin reports callback - измененная версия
 @dp.callback_query(F.data == "admin_reports")
 async def admin_reports_callback(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
@@ -1615,9 +1616,8 @@ async def admin_reports_callback(callback: CallbackQuery):
         return
     
     keyboard = InlineKeyboardBuilder()
-    keyboard.add(InlineKeyboardButton(text="📋 Все репорты", callback_data="all_reports"))
-    keyboard.add(InlineKeyboardButton(text="🗑 Удалить репорт", callback_data="delete_report"))
     keyboard.add(InlineKeyboardButton(text="📜 Список репортов", callback_data="report_list"))
+    keyboard.add(InlineKeyboardButton(text="🗑 Удалить репорт", callback_data="delete_report"))
     keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back"))
     
     keyboard.adjust(1)
@@ -1625,7 +1625,6 @@ async def admin_reports_callback(callback: CallbackQuery):
     await callback.message.edit_text(f"{hbold('⚠️ Управление репортами')}", reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
     await callback.answer()
 
-# All reports callback
 # All reports callback - модифицированная версия
 @dp.callback_query(F.data == "all_reports")
 async def all_reports_callback(callback: CallbackQuery, state: FSMContext):
@@ -1701,9 +1700,8 @@ async def reports_prev_callback(callback: CallbackQuery, state: FSMContext):
     conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT report_id, user_id, message, report_date 
+        SELECT report_id, user_id, message, report_date, status 
         FROM reports 
-        WHERE status = "open" 
         ORDER BY report_date DESC 
         LIMIT ? OFFSET ?
     ''', (10, page * 10))
@@ -1723,9 +1721,8 @@ async def reports_next_callback(callback: CallbackQuery, state: FSMContext):
     conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT report_id, user_id, message, report_date 
+        SELECT report_id, user_id, message, report_date, status 
         FROM reports 
-        WHERE status = "open" 
         ORDER BY report_date DESC 
         LIMIT ? OFFSET ?
     ''', (10, page * 10))
@@ -1744,9 +1741,8 @@ async def reports_first_callback(callback: CallbackQuery, state: FSMContext):
     conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT report_id, user_id, message, report_date 
+        SELECT report_id, user_id, message, report_date, status 
         FROM reports 
-        WHERE status = "open" 
         ORDER BY report_date DESC 
         LIMIT ? OFFSET ?
     ''', (10, 0))
@@ -1766,9 +1762,8 @@ async def reports_last_callback(callback: CallbackQuery, state: FSMContext):
     conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT report_id, user_id, message, report_date 
+        SELECT report_id, user_id, message, report_date, status 
         FROM reports 
-        WHERE status = "open" 
         ORDER BY report_date DESC 
         LIMIT ? OFFSET ?
     ''', (10, page * 10))
@@ -1824,7 +1819,7 @@ async def answer_report_handler(message: Message, state: FSMContext):
     await state.clear()
     log_event('INFO', f"Admin {message.from_user.id} answered report #{report_id}")
 
-# Delete report callback
+# Delete report callback - с пагинацией
 @dp.callback_query(F.data == "delete_report")
 async def delete_report_callback(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
@@ -1915,16 +1910,26 @@ async def confirm_delete_report_callback(callback: CallbackQuery):
     await callback.answer()
     log_event('INFO', f"Admin {callback.from_user.id} deleted report #{report_id}")
 
-# Report list callback
+# Report list callback - измененная версия с пагинацией
 @dp.callback_query(F.data == "report_list")
-async def report_list_callback(callback: CallbackQuery):
+async def report_list_callback(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer("❌ У вас нет доступа.")
         return
     
     conn = sqlite3.connect('/root/bot_mirrozz_database.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT report_id, user_id, message, report_date, status FROM reports ORDER BY report_date DESC LIMIT 10')
+    cursor.execute('SELECT COUNT(*) FROM reports')
+    total_reports = cursor.fetchone()[0]
+    items_per_page = 10
+    total_pages = (total_reports + items_per_page - 1) // items_per_page
+    
+    cursor.execute('''
+        SELECT report_id, user_id, message, report_date, status 
+        FROM reports 
+        ORDER BY report_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (items_per_page, 0))
     reports = cursor.fetchall()
     conn.close()
     
@@ -1933,9 +1938,15 @@ async def report_list_callback(callback: CallbackQuery):
         await callback.answer()
         return
     
-    reports_text = f"{hbold('📜 Список репортов')}\n\n"
+    await state.update_data(reports_page=0, total_pages=total_pages)
+    await show_reports_page(callback.message, state, reports, 0, total_pages)
+    await callback.answer()
+
+async def show_reports_page(message: Message, state: FSMContext, reports: list, page: int, total_pages: int):
+    reports_text = f"{hbold('📜 Список репортов')} (Страница {page + 1}/{total_pages})\n\n"
+    
     for report in reports:
-        report_id, user_id, message, report_date, status = report
+        report_id, user_id, message_text, report_date, status = report
         
         try:
             user = await bot.get_chat(user_id)
@@ -1948,12 +1959,27 @@ async def report_list_callback(callback: CallbackQuery):
         reports_text += f"🆔 ID репорта: {report_id}\n"
         reports_text += f"👤 От: {user_name} ({username})\n"
         reports_text += f"📅 Дата: {report_date}\n"
-        reports_text += f"📝 Сообщение: {message[:50]}...\n"
-        reports_text += f"📊 Статус: {status}\n\n"
+        reports_text += f"📊 Статус: {status}\n"
+        reports_text += f"📝 Сообщение: {message_text[:50]}...\n\n"
     
-    await callback.message.answer(reports_text, parse_mode=ParseMode.HTML)
-    await callback.answer()
-    log_event('INFO', f"Admin {callback.from_user.id} viewed report list")
+    keyboard = create_navigation_keyboard(page, total_pages, "admin_reports", "reports_")
+    
+    # Добавляем кнопки действий для первого репорта на странице
+    if reports:
+        first_report = reports[0]
+        report_id = first_report[0]
+        user_id = first_report[1]
+        
+        action_keyboard = InlineKeyboardBuilder()
+        action_keyboard.add(InlineKeyboardButton(text="✉️ Ответить", callback_data=f"answer_report_{report_id}"))
+        action_keyboard.add(InlineKeyboardButton(text="🚫 Забанить", callback_data=f"ban_{user_id}"))
+        action_keyboard.add(InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_report_{report_id}"))
+        action_keyboard.adjust(1)
+        
+        await message.answer(reports_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
+        await message.answer("Действия с первым репортом на странице:", reply_markup=action_keyboard.as_markup())
+    else:
+        await message.answer(reports_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
 
 # Admin users callback
 @dp.callback_query(F.data == "admin_users")
@@ -2661,7 +2687,7 @@ async def admin_developer_callback(callback: CallbackQuery):
     await callback.answer()
     log_event('INFO', f"Developer {callback.from_user.id} accessed developer panel")
 
-# Developer database callback
+# Developer database callback - с кнопкой назад
 @dp.callback_query(F.data == "developer_database")
 async def developer_database_callback(callback: CallbackQuery):
     if not is_developer(callback.from_user.id):
@@ -2678,6 +2704,110 @@ async def developer_database_callback(callback: CallbackQuery):
     keyboard.adjust(2)
     
     await callback.message.edit_text(f"{hbold('💾 Управление базой данных')}", reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
+    await callback.answer()
+
+# Developer messages callback - с кнопкой назад
+@dp.callback_query(F.data == "developer_messages")
+async def developer_messages_callback(callback: CallbackQuery):
+    if not is_developer(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа.")
+        return
+    
+    keyboard = InlineKeyboardBuilder()
+    keyboard.add(InlineKeyboardButton(text="📩 Отправить системное сообщение", callback_data="send_system_message"))
+    keyboard.add(InlineKeyboardButton(text="📜 История сообщений", callback_data="message_history"))
+    keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="admin_developer"))
+    
+    keyboard.adjust(1)
+    
+    await callback.message.edit_text(f"{hbold('📨 Управление системными сообщениями')}", reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
+    await callback.answer()
+
+# Developer errors callback - с кнопкой назад
+@dp.callback_query(F.data == "developer_errors")
+async def developer_errors_callback(callback: CallbackQuery):
+    if not is_developer(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа.")
+        return
+    
+    keyboard = InlineKeyboardBuilder()
+    keyboard.add(InlineKeyboardButton(text="📊 Подробная статистика", callback_data="error_status"))
+    keyboard.add(InlineKeyboardButton(text="📜 Последние ошибки", callback_data="list_errors"))
+    keyboard.add(InlineKeyboardButton(text="📥 Скачать логи", callback_data="download_logs"))
+    keyboard.add(InlineKeyboardButton(text="🗑 Очистить логи", callback_data="clear_logs"))
+    keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="admin_developer"))
+    
+    keyboard.adjust(1)
+    
+    await callback.message.edit_text(
+        f"{hbold('🚫 Управление ошибками и логами')}\n\nПросмотр статистики ошибок и управление логами бота",
+        reply_markup=keyboard.as_markup(),
+        parse_mode=ParseMode.HTML
+    )
+    await callback.answer()
+
+# Developer server callback - с кнопкой назад
+@dp.callback_query(F.data == "developer_server")
+async def developer_server_callback(callback: CallbackQuery):
+    if not is_developer(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа.")
+        return
+    
+    try:
+        # Calculate uptime
+        uptime = time.time() - BOT_START_TIME
+        uptime_str = str(timedelta(seconds=int(uptime)))
+        
+        # Get server stats with error handling
+        try:
+            cpu_percent = psutil.cpu_percent(interval=1)
+        except Exception as e:
+            cpu_percent = f"Ошибка: {str(e)}"
+        
+        try:
+            memory = psutil.virtual_memory()
+            memory_str = f"{memory.percent}% ({memory.used / (1024**3):.2f} / {memory.total / (1024**3):.2f} GB)"
+        except Exception as e:
+            memory_str = f"Ошибка: {str(e)}"
+        
+        try:
+            disk = psutil.disk_usage('/')
+            disk_str = f"{disk.percent}% ({disk.used / (1024**3):.2f} / {disk.total / (1024**3):.2f} GB)"
+        except Exception as e:
+            disk_str = f"Ошибка: {str(e)}"
+        
+        server_text = f"""
+{hbold('🖥 Информация о сервере')}
+
+⏳ Время работы: {uptime_str}
+🧮 CPU: {cpu_percent}
+💾 Память: {memory_str}
+💿 Диск: {disk_str}
+"""
+        
+        keyboard = InlineKeyboardBuilder()
+        keyboard.add(InlineKeyboardButton(text="🔄 Перезапустить бота", callback_data="restart_bot"))
+        keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="admin_developer"))
+        
+        keyboard.adjust(1)
+        
+        await callback.message.edit_text(
+            server_text,
+            reply_markup=keyboard.as_markup(),
+            parse_mode=ParseMode.HTML
+        )
+        log_event('INFO', f"Developer {callback.from_user.id} viewed server stats")
+        
+    except Exception as e:
+        keyboard = InlineKeyboardBuilder()
+        keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="admin_developer"))
+        await callback.message.edit_text(
+            f"❌ Ошибка при получении информации о сервере: {str(e)}",
+            reply_markup=keyboard.as_markup(),
+            parse_mode=ParseMode.HTML
+        )
+        log_event('ERROR', f"Developer {callback.from_user.id} failed to view server stats: {str(e)}")
+    
     await callback.answer()
 
 # Download database callback
@@ -2840,23 +2970,6 @@ async def load_database_handler(message: Message, state: FSMContext):
     
     await state.clear()
 
-# Developer messages callback
-@dp.callback_query(F.data == "developer_messages")
-async def developer_messages_callback(callback: CallbackQuery):
-    if not is_developer(callback.from_user.id):
-        await callback.answer("❌ У вас нет доступа.")
-        return
-    
-    keyboard = InlineKeyboardBuilder()
-    keyboard.add(InlineKeyboardButton(text="📩 Отправить системное сообщение", callback_data="send_system_message"))
-    keyboard.add(InlineKeyboardButton(text="📜 История сообщений", callback_data="message_history"))
-    keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="admin_developer"))
-    
-    keyboard.adjust(1)
-    
-    await callback.message.edit_text(f"{hbold('📨 Управление системными сообщениями')}", reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
-    await callback.answer()
-
 # Send system message callback
 @dp.callback_query(F.data == "send_system_message")
 async def send_system_message_callback(callback: CallbackQuery, state: FSMContext):
@@ -2939,28 +3052,6 @@ async def message_history_callback(callback: CallbackQuery):
     await callback.message.answer(history_text, parse_mode=ParseMode.HTML)
     await callback.answer()
     log_event('INFO', f"Developer {callback.from_user.id} viewed message history")
-
-@dp.callback_query(F.data == "developer_errors")
-async def developer_errors_callback(callback: CallbackQuery):
-    if not is_developer(callback.from_user.id):
-        await callback.answer("❌ У вас нет доступа.")
-        return
-    
-    keyboard = InlineKeyboardBuilder()
-    keyboard.add(InlineKeyboardButton(text="📊 Подробная статистика", callback_data="error_status"))
-    keyboard.add(InlineKeyboardButton(text="📜 Последние ошибки", callback_data="list_errors"))
-    keyboard.add(InlineKeyboardButton(text="📥 Скачать логи", callback_data="download_logs"))
-    keyboard.add(InlineKeyboardButton(text="🗑 Очистить логи", callback_data="clear_logs"))
-    keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="admin_developer"))
-    
-    keyboard.adjust(1)
-    
-    await callback.message.edit_text(
-        f"{hbold('🚫 Управление ошибками и логами')}\n\nПросмотр статистики ошибок и управление логами бота",
-        reply_markup=keyboard.as_markup(),
-        parse_mode=ParseMode.HTML
-    )
-    await callback.answer()
 
 # Список ошибок
 @dp.callback_query(F.data == "list_errors")
