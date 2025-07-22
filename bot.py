@@ -403,7 +403,7 @@ async def subgram_check_callback(callback: CallbackQuery):
         current_time = time.time()
         
         # Проверяем, была ли успешная проверка подписки в последний час
-        if user_id in LAST_SUBSCRIPTION_CHECK and (current_time - LAST_SUBSCRIPTION_CHECK[user_id]) < 3600:
+        if user_id in LAST_SUBSCRIPTION_CHECK and (current_time - LAST_SUBSCRIPTION_CHECK[user_id]) < 60:
             await callback.message.delete()
             return
             
@@ -472,7 +472,7 @@ async def subgram_check_with_message_callback(callback: CallbackQuery):
     
     try:
         # Проверяем, была ли успешная проверка подписки в последний час
-        if user_id in LAST_SUBSCRIPTION_CHECK and (current_time - LAST_SUBSCRIPTION_CHECK[user_id]) < 3600:
+        if user_id in LAST_SUBSCRIPTION_CHECK and (current_time - LAST_SUBSCRIPTION_CHECK[user_id]) < 60:
             await callback.message.delete()
             return
             
