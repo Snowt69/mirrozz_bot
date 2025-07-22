@@ -556,13 +556,13 @@ async def subgram_check_with_message_callback(callback: CallbackQuery):
         log_event('ERROR', f"Error in subgram_check_with_message_callback: {str(e)}")
         await callback.answer("❌ Произошла ошибка при проверке подписки")
 
-async def check_subscription_required(handler):
-    async def wrapper(message: Message | CallbackQuery, *args, **kwargs):
+def check_subscription_required(handler):
+    async def wrapper(message: Union[Message, CallbackQuery], *args, **kwargs):
         # Для админов/разработчиков пропускаем проверку
         if isinstance(message, Message):
             user_id = message.from_user.id
         else:
-            user_id = message.message.from_user.id
+            user_id = message.from_user.id
             
         if is_admin(user_id) or is_developer(user_id):
             return await handler(message, *args, **kwargs)
@@ -688,12 +688,6 @@ async def show_welcome(message: Message):
     welcome_text += "\n\nНапиши /help, чтобы узнать все команды!"
     
     await message.answer(welcome_text, parse_mode=ParseMode.HTML)
-
-# Применяем проверку подписки ко всем обработчикам (кроме админки)
-def setup_subscription_check():
-    for handler in dp.message_handlers.handlers:
-        if not handler.handler.__name__.startswith('admin_'):
-            handler.filters.append(check_subscription_required)
 
 # Help command handler
 @dp.message(Command('help'))
