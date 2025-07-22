@@ -24,6 +24,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.markdown import hbold, hlink, hcode
+from enum import Enum
 
 # Logging setup
 logging.basicConfig(
@@ -137,6 +138,68 @@ def init_db():
 
 init_db()
 
+def init_catalog_db():
+    conn = sqlite3.connect('/root/mirrozz_catalog_database.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS scripts (
+        script_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        script_code TEXT NOT NULL,
+        menu TEXT NOT NULL,
+        has_key INTEGER DEFAULT 0,
+        created_by INTEGER NOT NULL,
+        creation_date TEXT NOT NULL,
+        views INTEGER DEFAULT 0,
+        image_id TEXT
+    )
+    ''')
+    
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS script_reactions (
+        reaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        script_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        reaction_type INTEGER NOT NULL,  -- 1 like, -1 dislike
+        reaction_date TEXT NOT NULL,
+        FOREIGN KEY(script_id) REFERENCES scripts(script_id)
+    )
+    ''')
+    
+    cursor.execute('''
+    CREATE INDEX IF NOT EXISTS idx_script_reactions ON script_reactions(script_id, user_id)
+    ''')
+    
+    conn.commit()
+    conn.close()
+
+init_catalog_db()
+
+# Добавляем enum для состояний
+class CatalogStates(StatesGroup):
+    search_query = State()
+    add_script_name = State()
+    add_script_description = State()
+    add_script_menu = State()
+    add_script_code = State()
+    add_script_key = State()
+    add_script_image = State()
+    edit_script_name = State()
+    edit_script_description = State()
+    edit_script_menu = State()
+    edit_script_code = State()
+    edit_script_key = State()
+    edit_script_image = State()
+
+# Добавляем enum для типов отображения каталога
+class CatalogViewType(Enum):
+    SEARCH = "search"
+    POPULAR = "popular"
+    RECENT = "recent"
+    ADMIN_VIEW = "admin_view"
+
 # Bot setup
 bot = Bot(token="8178374718:AAHvyoBH5Ty2VKwNyfdWeOez9XLSflNQtaM")
 dp = Dispatcher()
@@ -233,6 +296,131 @@ async def check_subgram_subscription(
         return {"status": "error", "code": 500, "message": "Ошибка соединения с SubGram"}
 
 # Helper functions
+def get_script_info(script_id: int) -> dict:
+    conn = sqlite3.connect('/root/mirrozz_catalog_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT s.*, 
+               COUNT(CASE WHEN sr.reaction_type = 1 THEN 1 END) as likes,
+               COUNT(CASE WHEN sr.reaction_type = -1 THEN 1 END) as dislikes
+        FROM scripts s
+        LEFT JOIN script_reactions sr ON s.script_id = sr.script_id
+        WHERE s.script_id = ?
+        GROUP BY s.script_id
+    ''', (script_id,))
+    script = cursor.fetchone()
+    conn.close()
+    
+    if script:
+        return {
+            'script_id': script[0],
+            'name': script[1],
+            'description': script[2],
+            'script_code': script[3],
+            'menu': script[4],
+            'has_key': script[5],
+            'created_by': script[6],
+            'creation_date': script[7],
+            'views': script[8],
+            'image_id': script[9],
+            'likes': script[10] or 0,
+            'dislikes': script[11] or 0
+        }
+    return None
+
+def increment_script_views(script_id: int):
+    conn = sqlite3.connect('/root/mirrozz_catalog_database.db')
+    cursor = conn.cursor()
+    cursor.execute('UPDATE scripts SET views = views + 1 WHERE script_id = ?', (script_id,))
+    conn.commit()
+    conn.close()
+
+def add_user_reaction(script_id: int, user_id: int, reaction_type: int):
+    conn = sqlite3.connect('/root/mirrozz_catalog_database.db')
+    cursor = conn.cursor()
+    
+    # Удаляем предыдущую реакцию пользователя если есть
+    cursor.execute('DELETE FROM script_reactions WHERE script_id = ? AND user_id = ?', (script_id, user_id))
+    
+    # Добавляем новую реакцию
+    cursor.execute('''
+        INSERT INTO script_reactions (script_id, user_id, reaction_type, reaction_date)
+        VALUES (?, ?, ?, ?)
+    ''', (script_id, user_id, reaction_type, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    
+    conn.commit()
+    conn.close()
+
+def get_scripts_by_search(query: str, limit: int = 10, offset: int = 0) -> list:
+    conn = sqlite3.connect('/root/mirrozz_catalog_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT script_id FROM scripts 
+        WHERE LOWER(name) LIKE ? OR LOWER(description) LIKE ? OR LOWER(menu) LIKE ?
+        ORDER BY script_id DESC LIMIT ? OFFSET ?
+    ''', (f"%{query.lower()}%", f"%{query.lower()}%", f"%{query.lower()}%", limit, offset))
+    scripts = cursor.fetchall()
+    conn.close()
+    return [script[0] for script in scripts]
+
+def get_popular_scripts(limit: int = 10, offset: int = 0) -> list:
+    conn = sqlite3.connect('/root/mirrozz_catalog_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT s.script_id, 
+               s.views + 
+               (COUNT(CASE WHEN sr.reaction_type = 1 THEN 1 END) * 2) - 
+               (COUNT(CASE WHEN sr.reaction_type = -1 THEN 1 END) * 1) as score
+        FROM scripts s
+        LEFT JOIN script_reactions sr ON s.script_id = sr.script_id
+        GROUP BY s.script_id
+        ORDER BY score DESC, s.views DESC
+        LIMIT ? OFFSET ?
+    ''', (limit, offset))
+    scripts = cursor.fetchall()
+    conn.close()
+    return [script[0] for script in scripts]
+
+def get_recent_scripts(limit: int = 10, offset: int = 0) -> list:
+    conn = sqlite3.connect('/root/mirrozz_catalog_database.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT script_id FROM scripts ORDER BY creation_date DESC LIMIT ? OFFSET ?', (limit, offset))
+    scripts = cursor.fetchall()
+    conn.close()
+    return [script[0] for script in scripts]
+
+def get_total_scripts_count() -> int:
+    conn = sqlite3.connect('/root/mirrozz_catalog_database.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM scripts')
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
+
+def get_total_views_count() -> int:
+    conn = sqlite3.connect('/root/mirrozz_catalog_database.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT SUM(views) FROM scripts')
+    count = cursor.fetchone()[0] or 0
+    conn.close()
+    return count
+
+def get_total_likes_count() -> int:
+    conn = sqlite3.connect('/root/mirrozz_catalog_database.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM script_reactions WHERE reaction_type = 1')
+    count = cursor.fetchone()[0] or 0
+    conn.close()
+    return count
+
+def get_total_dislikes_count() -> int:
+    conn = sqlite3.connect('/root/mirrozz_catalog_database.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM script_reactions WHERE reaction_type = -1')
+    count = cursor.fetchone()[0] or 0
+    conn.close()
+    return count
+
 def can_send_report(user_id: int) -> tuple[bool, str]:
     """Проверяет, может ли пользователь отправить репорт.
     Возвращает (может_отправить, сообщение_об_ошибке)"""
@@ -680,6 +868,75 @@ async def cmd_report(message: Message, state: FSMContext):
     await message.answer("✅ Ваша жалоба отправлена администраторам. Ответ придёт в течение 30 минут.")
     log_event('INFO', f"User {user.id} submitted report #{report_id}")
 
+# Команда /catalog
+@dp.message(Command('catalog'))
+async def cmd_catalog(message: Message, state: FSMContext):
+    if is_banned(message.from_user.id):
+        await message.answer("❌ Вы заблокированы в этом боте.")
+        return
+    
+    # Проверка подписки через SubGram
+    subgram_response = await check_subgram_subscription(
+        user_id=message.from_user.id,
+        chat_id=message.chat.id,
+        first_name=message.from_user.first_name
+    )
+    
+    if subgram_response.get('status') != 'ok':
+        keyboard = InlineKeyboardBuilder()
+        keyboard.add(InlineKeyboardButton(text="✅ Я подписался", callback_data="subgram_check"))
+        
+        channels_text = "📢 Для использования каталога подпишитесь на каналы:\n\n"
+        if 'links' in subgram_response:
+            for link in subgram_response['links']:
+                channels_text += f"• {link}\n"
+        
+        await message.answer(channels_text, reply_markup=keyboard.as_markup())
+        return
+    
+    await show_catalog_main_menu(message)
+
+async def show_catalog_main_menu(message: Message):
+    total_scripts = get_total_scripts_count()
+    total_views = get_total_views_count()
+    total_likes = get_total_likes_count()
+    
+    text = f"""
+📚 <b>Каталог скриптов</b>
+
+Всего скриптов: {total_scripts}
+Общее кол-во просмотров: {total_views}
+Общее кол-во лайков: {total_likes}
+"""
+    keyboard = InlineKeyboardBuilder()
+    keyboard.add(InlineKeyboardButton(text="🔍 Поиск скрипта", callback_data="catalog_search"))
+    keyboard.add(InlineKeyboardButton(text="🔥 Популярные скрипты", callback_data="catalog_popular"))
+    keyboard.add(InlineKeyboardButton(text="🆕 Последние скрипты", callback_data="catalog_recent"))
+    
+    if is_admin(message.from_user.id):
+        keyboard.add(InlineKeyboardButton(text="👑 Управление каталогом", callback_data="catalog_admin"))
+    
+    keyboard.adjust(1)
+    
+    await message.answer(text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
+
+# Обработчики кнопок каталога
+@dp.callback_query(F.data == "catalog_search")
+async def catalog_search_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.message.answer("🔍 Введите название режима или скрипта для поиска:")
+    await state.set_state(CatalogStates.search_query)
+    await callback.answer()
+
+@dp.callback_query(F.data == "catalog_popular")
+async def catalog_popular_callback(callback: CallbackQuery, state: FSMContext):
+    await show_scripts_list(callback.message, CatalogViewType.POPULAR)
+    await callback.answer()
+
+@dp.callback_query(F.data == "catalog_recent")
+async def catalog_recent_callback(callback: CallbackQuery, state: FSMContext):
+    await show_scripts_list(callback.message, CatalogViewType.RECENT)
+    await callback.answer()
+
 # Admin command handler
 @dp.message(Command('admin'))
 async def cmd_admin(message: Message):
@@ -694,14 +951,409 @@ async def cmd_admin(message: Message):
     keyboard.add(InlineKeyboardButton(text="⚠️ Репорты", callback_data="admin_reports"))
     keyboard.add(InlineKeyboardButton(text="👤 Пользователи", callback_data="admin_users"))
     keyboard.add(InlineKeyboardButton(text="📢 Реклама", callback_data="admin_advertise"))
+    keyboard.add(InlineKeyboardButton(text="📚 Каталог скриптов", callback_data="catalog_admin"))  # Новая кнопка
     
     if is_developer(message.from_user.id):
         keyboard.add(InlineKeyboardButton(text="💻 Панель разработчика", callback_data="admin_developer"))
     
-    keyboard.adjust(2)
+    keyboard.adjust(2)  # Можно настроить количество кнопок в ряду
     
     await message.answer(f"{hbold('👑 Админ-панель')}", reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
     log_event('INFO', f"Admin {message.from_user.id} accessed admin panel")
+
+@dp.callback_query(F.data == "catalog_admin")
+async def catalog_admin_callback(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа.")
+        return
+    
+    keyboard = InlineKeyboardBuilder()
+    keyboard.add(InlineKeyboardButton(text="➕ Добавить скрипт", callback_data="catalog_add_script"))
+    keyboard.add(InlineKeyboardButton(text="📋 Список скриптов", callback_data="catalog_list_scripts"))
+    keyboard.add(InlineKeyboardButton(text="📊 Статистика", callback_data="catalog_stats"))
+    keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="catalog_back"))
+    
+    keyboard.adjust(1)
+    
+    await callback.message.edit_text("👑 Управление каталогом скриптов", reply_markup=keyboard.as_markup())
+    await callback.answer()
+
+# Обработчик поискового запроса
+@dp.message(CatalogStates.search_query)
+async def process_search_query(message: Message, state: FSMContext):
+    query = message.text.strip()
+    if not query:
+        await message.answer("❌ Запрос не может быть пустым.")
+        return
+    
+    await state.update_data(search_query=query, offset=0)
+    await show_scripts_list(message, CatalogViewType.SEARCH, query)
+
+async def show_scripts_list(message: Message, view_type: CatalogViewType, query: str = None, offset: int = 0):
+    if view_type == CatalogViewType.SEARCH:
+        script_ids = get_scripts_by_search(query, limit=1, offset=offset)
+    elif view_type == CatalogViewType.POPULAR:
+        script_ids = get_popular_scripts(limit=1, offset=offset)
+    elif view_type == CatalogViewType.RECENT:
+        script_ids = get_recent_scripts(limit=1, offset=offset)
+    else:
+        return
+    
+    if not script_ids:
+        await message.answer("❌ Скрипты не найдены.")
+        return
+    
+    script_id = script_ids[0]
+    await show_script(message, script_id, view_type, query, offset)
+
+async def show_script(message: Message, script_id: int, view_type: CatalogViewType, query: str = None, offset: int = 0):
+    script = get_script_info(script_id)
+    if not script:
+        await message.answer("❌ Скрипт не найден.")
+        return
+    
+    increment_script_views(script_id)
+    
+    try:
+        creator = await bot.get_chat(script['created_by'])
+        creator_name = creator.full_name
+    except:
+        creator_name = "Неизвестно"
+    
+    text = f"""
+📜 <b>{script['name']}</b>
+
+📅 Дата создания: {script['creation_date']}
+👤 Создал: {creator_name}
+👀 Просмотров: {script['views']}
+👍 Лайков: {script['likes']}
+👎 Дизлайков: {script['dislikes']}
+🔑 Ключ система: {'✅' if script['has_key'] else '❌'}
+
+📝 Описание:
+{script['description']}
+
+🎮 Меню:
+{script['menu']}
+"""
+    keyboard = InlineKeyboardBuilder()
+    
+    # Кнопки навигации
+    if view_type == CatalogViewType.SEARCH:
+        prev_callback = f"search_prev_{offset}_{query}"
+        next_callback = f"search_next_{offset}_{query}"
+    elif view_type == CatalogViewType.POPULAR:
+        prev_callback = f"popular_prev_{offset}"
+        next_callback = f"popular_next_{offset}"
+    elif view_type == CatalogViewType.RECENT:
+        prev_callback = f"recent_prev_{offset}"
+        next_callback = f"recent_next_{offset}"
+    else:
+        prev_callback = next_callback = ""
+    
+    keyboard.add(InlineKeyboardButton(text="🔙 Каталог", callback_data="catalog_back"))
+    
+    if offset > 0:
+        keyboard.add(InlineKeyboardButton(text="⬅️ Назад", callback_data=prev_callback))
+    
+    keyboard.add(InlineKeyboardButton(text="📥 Получить", callback_data=f"get_script_{script_id}"))
+    
+    if view_type != CatalogViewType.ADMIN_VIEW:
+        keyboard.add(InlineKeyboardButton(text="👍", callback_data=f"like_script_{script_id}"))
+        keyboard.add(InlineKeyboardButton(text="👎", callback_data=f"dislike_script_{script_id}"))
+    
+    if (view_type == CatalogViewType.SEARCH and len(get_scripts_by_search(query, limit=1, offset=offset+1)) > 0) or \
+       (view_type == CatalogViewType.POPULAR and len(get_popular_scripts(limit=1, offset=offset+1)) > 0) or \
+       (view_type == CatalogViewType.RECENT and len(get_recent_scripts(limit=1, offset=offset+1)) > 0):
+        keyboard.add(InlineKeyboardButton(text="➡️ Вперед", callback_data=next_callback))
+    
+    keyboard.adjust(2, repeat=True)
+    
+    if script['image_id']:
+        await message.answer_photo(script['image_id'], caption=text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
+    else:
+        await message.answer(text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
+
+# Обработчики навигации
+@dp.callback_query(F.data.startswith("search_prev_"))
+async def search_prev_callback(callback: CallbackQuery):
+    parts = callback.data.split('_')
+    offset = int(parts[2]) - 1
+    query = '_'.join(parts[3:])
+    
+    await callback.message.delete()
+    await show_scripts_list(callback.message, CatalogViewType.SEARCH, query, offset)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("search_next_"))
+async def search_next_callback(callback: CallbackQuery):
+    parts = callback.data.split('_')
+    offset = int(parts[2]) + 1
+    query = '_'.join(parts[3:])
+    
+    await callback.message.delete()
+    await show_scripts_list(callback.message, CatalogViewType.SEARCH, query, offset)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("popular_prev_"))
+async def popular_prev_callback(callback: CallbackQuery):
+    offset = int(callback.data.split('_')[2]) - 1
+    await callback.message.delete()
+    await show_scripts_list(callback.message, CatalogViewType.POPULAR, offset=offset)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("popular_next_"))
+async def popular_next_callback(callback: CallbackQuery):
+    offset = int(callback.data.split('_')[2]) + 1
+    await callback.message.delete()
+    await show_scripts_list(callback.message, CatalogViewType.POPULAR, offset=offset)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("recent_prev_"))
+async def recent_prev_callback(callback: CallbackQuery):
+    offset = int(callback.data.split('_')[2]) - 1
+    await callback.message.delete()
+    await show_scripts_list(callback.message, CatalogViewType.RECENT, offset=offset)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("recent_next_"))
+async def recent_next_callback(callback: CallbackQuery):
+    offset = int(callback.data.split('_')[2]) + 1
+    await callback.message.delete()
+    await show_scripts_list(callback.message, CatalogViewType.RECENT, offset=offset)
+    await callback.answer()
+
+# Обработчики лайков/дизлайков
+@dp.callback_query(F.data.startswith("like_script_"))
+async def like_script_callback(callback: CallbackQuery):
+    script_id = int(callback.data.split('_')[2])
+    add_user_reaction(script_id, callback.from_user.id, 1)
+    await callback.answer("👍 Вы поставили лайк!")
+
+@dp.callback_query(F.data.startswith("dislike_script_"))
+async def dislike_script_callback(callback: CallbackQuery):
+    script_id = int(callback.data.split('_')[2])
+    add_user_reaction(script_id, callback.from_user.id, -1)
+    await callback.answer("👎 Вы поставили дизлайк!")
+
+# Обработчик получения скрипта
+@dp.callback_query(F.data.startswith("get_script_"))
+async def get_script_callback(callback: CallbackQuery):
+    script_id = int(callback.data.split('_')[2])
+    script = get_script_info(script_id)
+    
+    if not script:
+        await callback.answer("❌ Скрипт не найден.")
+        return
+    
+    await callback.message.answer(f"📜 Скрипт для {script['name']}:\n\n{script['script_code']}")
+    await callback.answer()
+
+# Обработчик возврата в каталог
+@dp.callback_query(F.data == "catalog_back")
+async def catalog_back_callback(callback: CallbackQuery):
+    await callback.message.delete()
+    await show_catalog_main_menu(callback.message)
+    await callback.answer()
+
+# Админские функции каталога
+@dp.callback_query(F.data == "catalog_add_script")
+async def catalog_add_script_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.message.answer("📝 Введите название скрипта:")
+    await state.set_state(CatalogStates.add_script_name)
+    await callback.answer()
+
+@dp.message(CatalogStates.add_script_name)
+async def process_add_script_name(message: Message, state: FSMContext):
+    await state.update_data(name=message.text)
+    await message.answer("📝 Введите описание скрипта:")
+    await state.set_state(CatalogStates.add_script_description)
+
+@dp.message(CatalogStates.add_script_description)
+async def process_add_script_description(message: Message, state: FSMContext):
+    await state.update_data(description=message.text)
+    await message.answer("🎮 Введите меню скрипта (какие функции доступны):")
+    await state.set_state(CatalogStates.add_script_menu)
+
+@dp.message(CatalogStates.add_script_menu)
+async def process_add_script_menu(message: Message, state: FSMContext):
+    await state.update_data(menu=message.text)
+    await message.answer("📜 Введите сам скрипт:")
+    await state.set_state(CatalogStates.add_script_code)
+
+@dp.message(CatalogStates.add_script_code)
+async def process_add_script_code(message: Message, state: FSMContext):
+    await state.update_data(script_code=message.text)
+    
+    keyboard = InlineKeyboardBuilder()
+    keyboard.add(InlineKeyboardButton(text="✅ Да", callback_data="script_has_key_1"))
+    keyboard.add(InlineKeyboardButton(text="❌ Нет", callback_data="script_has_key_0"))
+    
+    await message.answer("🔑 Скрипт требует ключ для работы?", reply_markup=keyboard.as_markup())
+
+@dp.callback_query(F.data.startswith("script_has_key_"))
+async def process_script_has_key(callback: CallbackQuery, state: FSMContext):
+    has_key = int(callback.data.split('_')[3])
+    await state.update_data(has_key=has_key)
+    await callback.message.answer("🖼 Отправьте изображение для скрипта (или нажмите /skip чтобы пропустить):")
+    await state.set_state(CatalogStates.add_script_image)
+    await callback.answer()
+
+@dp.message(Command('skip'), CatalogStates.add_script_image)
+async def skip_script_image(message: Message, state: FSMContext):
+    await process_script_image(message, state, None)
+
+@dp.message(CatalogStates.add_script_image)
+async def process_script_image_handler(message: Message, state: FSMContext):
+    if message.photo:
+        image_id = message.photo[-1].file_id
+    else:
+        image_id = None
+    
+    await process_script_image(message, state, image_id)
+
+async def process_script_image(message: Message, state: FSMContext, image_id: str = None):
+    data = await state.get_data()
+    
+    conn = sqlite3.connect('/root/mirrozz_catalog_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO scripts (name, description, script_code, menu, has_key, created_by, creation_date, image_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        data['name'],
+        data['description'],
+        data['script_code'],
+        data['menu'],
+        data['has_key'],
+        message.from_user.id,
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        image_id
+    ))
+    script_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    
+    await message.answer(f"✅ Скрипт успешно добавлен в каталог! ID: {script_id}")
+    await state.clear()
+
+@dp.callback_query(F.data == "catalog_list_scripts")
+async def catalog_list_scripts_callback(callback: CallbackQuery):
+    await show_admin_scripts_list(callback.message)
+
+async def show_admin_scripts_list(message: Message, offset: int = 0):
+    script_ids = get_recent_scripts(limit=5, offset=offset)
+    
+    if not script_ids:
+        await message.answer("❌ В каталоге нет скриптов.")
+        return
+    
+    keyboard = InlineKeyboardBuilder()
+    
+    for script_id in script_ids:
+        script = get_script_info(script_id)
+        keyboard.add(InlineKeyboardButton(
+            text=f"{script['name']} (ID: {script_id})",
+            callback_data=f"admin_view_script_{script_id}"
+        ))
+    
+    keyboard.adjust(1)
+    
+    # Кнопки навигации
+    nav_keyboard = InlineKeyboardBuilder()
+    
+    if offset > 0:
+        nav_keyboard.add(InlineKeyboardButton(text="⏪ В начало", callback_data="admin_scripts_first"))
+        nav_keyboard.add(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"admin_scripts_prev_{offset}"))
+    
+    nav_keyboard.add(InlineKeyboardButton(text=f"{offset//5 + 1}", callback_data="no_action"))
+    
+    if len(get_recent_scripts(limit=5, offset=offset+5)) > 0:
+        nav_keyboard.add(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"admin_scripts_next_{offset}"))
+        nav_keyboard.add(InlineKeyboardButton(text="В конец ⏩", callback_data=f"admin_scripts_last"))
+    
+    nav_keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="catalog_admin"))
+    nav_keyboard.adjust(4, 1)
+    
+    await message.answer("📋 Список скриптов (последние добавленные):", reply_markup=keyboard.as_markup())
+    await message.answer("Навигация:", reply_markup=nav_keyboard.as_markup())
+
+@dp.callback_query(F.data.startswith("admin_view_script_"))
+async def admin_view_script_callback(callback: CallbackQuery):
+    script_id = int(callback.data.split('_')[3])
+    await show_script(callback.message, script_id, CatalogViewType.ADMIN_VIEW)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("admin_scripts_prev_"))
+async def admin_scripts_prev_callback(callback: CallbackQuery):
+    offset = int(callback.data.split('_')[2]) - 5
+    await callback.message.delete()
+    await show_admin_scripts_list(callback.message, max(0, offset))
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("admin_scripts_next_"))
+async def admin_scripts_next_callback(callback: CallbackQuery):
+    offset = int(callback.data.split('_')[2]) + 5
+    await callback.message.delete()
+    await show_admin_scripts_list(callback.message, offset)
+    await callback.answer()
+
+@dp.callback_query(F.data == "admin_scripts_first")
+async def admin_scripts_first_callback(callback: CallbackQuery):
+    await callback.message.delete()
+    await show_admin_scripts_list(callback.message, 0)
+    await callback.answer()
+
+@dp.callback_query(F.data == "admin_scripts_last")
+async def admin_scripts_last_callback(callback: CallbackQuery):
+    total = get_total_scripts_count()
+    offset = max(0, total - 5)
+    await callback.message.delete()
+    await show_admin_scripts_list(callback.message, offset)
+    await callback.answer()
+
+@dp.callback_query(F.data == "catalog_stats")
+async def catalog_stats_callback(callback: CallbackQuery):
+    total_scripts = get_total_scripts_count()
+    total_views = get_total_views_count()
+    total_likes = get_total_likes_count()
+    total_dislikes = get_total_dislikes_count()
+    
+    # Самый популярный скрипт
+    popular_scripts = get_popular_scripts(limit=1)
+    if popular_scripts:
+        popular_script = get_script_info(popular_scripts[0])
+        popular_text = f"{popular_script['name']} (ID: {popular_script['script_id']}, 👀: {popular_script['views']}, 👍: {popular_script['likes']})"
+    else:
+        popular_text = "Нет данных"
+    
+    # Последний скрипт
+    recent_scripts = get_recent_scripts(limit=1)
+    if recent_scripts:
+        recent_script = get_script_info(recent_scripts[0])
+        recent_text = f"{recent_script['name']} (ID: {recent_script['script_id']}, добавлен {recent_script['creation_date']}"
+    else:
+        recent_text = "Нет данных"
+    
+    text = f"""
+📊 <b>Статистика каталога</b>
+
+📜 Всего скриптов: {total_scripts}
+👀 Всего просмотров: {total_views}
+👍 Всего лайков: {total_likes}
+👎 Всего дизлайков: {total_dislikes}
+
+🔥 <b>Самый популярный скрипт</b>:
+{popular_text}
+
+🆕 <b>Последний добавленный скрипт</b>:
+{recent_text}
+"""
+    keyboard = InlineKeyboardBuilder()
+    keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="catalog_admin"))
+    
+    await callback.message.edit_text(text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
+    await callback.answer()
 
 # Admin stats callback
 @dp.callback_query(F.data == "admin_stats")
