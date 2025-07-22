@@ -556,6 +556,34 @@ async def subgram_check_with_message_callback(callback: CallbackQuery):
         log_event('ERROR', f"Error in subgram_check_with_message_callback: {str(e)}")
         await callback.answer("❌ Произошла ошибка при проверке подписки")
 
+async def show_welcome(message: Message):
+    user = message.from_user
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM users')
+    user_count = cursor.fetchone()[0]
+    conn.close()
+    
+    welcome_text = f"""
+# Привет, <b>{user.first_name}</b> 👋
+
+Я Mirrozz Scripts — бот, который выдает актуальные скрипты и инжекторы для Roblox по ссылке! 🚀
+
+<b>Почему я лучший?</b>
+- <b>Актуальные скрипты</b> — база обновляется регулярно!
+- <b>Мгновенный доступ</b> — получай скрипты в пару кликов!
+- <b>Надежное хранение</b> — твои скрипты всегда под рукой!
+- <b>Стабильная работа</b> — бот на мощном сервере, без сбоев!
+"""
+    if is_admin(user.id):
+        welcome_text += f"\n\n<b>👑 Вы администратор бота!</b>\nДоступ к админ-панели: /admin"
+    if is_developer(user.id):
+        welcome_text += f"\n\n<b>💻 Вы разработчик бота!</b>\nДоступ к панели разработчика: /admin"
+    
+    welcome_text += "\n\nНапиши /help, чтобы узнать все команды!"
+    
+    await message.answer(welcome_text, parse_mode=ParseMode.HTML)
+
 @dp.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     start_args = message.text.split()
@@ -566,12 +594,10 @@ async def cmd_start(message: Message, state: FSMContext):
     
     update_user_visit(user.id, user.username, user.first_name, user.last_name)
     
-    # Если есть ссылка - сначала проверка подписки
     if len(start_args) > 1:
         link_id = start_args[1]
         await state.update_data(link_id=link_id)
         
-        # Сообщение с кнопкой проверки
         keyboard = InlineKeyboardBuilder()
         keyboard.add(InlineKeyboardButton(
             text="✅ Я подписался", 
@@ -585,36 +611,7 @@ async def cmd_start(message: Message, state: FSMContext):
             reply_markup=keyboard.as_markup()
         )
     else:
-        # Если нет ссылки - сразу приветствие
         await show_welcome(message)
-
-async def show_welcome(message: Message):
-    user = message.from_user
-    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) FROM users')
-    user_count = cursor.fetchone()[0]
-    conn.close()
-    
-    welcome_text = f"""
-👋 Привет, {hbold(user.first_name)}!
-
-Я Mirrozz Scripts — бот, который выдает актуальные скрипты и инжекторы для Roblox по ссылке! 🚀
-
-{hbold('Почему я лучший?')}
-• {hbold('Актуальные скрипты')} — база обновляется регулярно!
-• {hbold('Мгновенный доступ')} — получай скрипты в пару кликов!
-• {hbold('Надежное хранение')} — твои скрипты всегда под рукой!
-• {hbold('Стабильная работа')} — бот на мощном сервере, без сбоев!
-"""
-    if is_admin(user.id):
-        welcome_text += f"\n{hbold('👑 Вы администратор бота!')}\nДоступ к админ-панели: /admin"
-    if is_developer(user.id):
-        welcome_text += f"\n{hbold('💻 Вы разработчик бота!')}\nДоступ к панели разработчика: /admin"
-    
-    welcome_text += "\n\nНапиши /help, чтобы узнать все команды!"
-    
-    await message.answer(welcome_text)
 
 @dp.callback_query(F.data == "verify_subscription")
 async def verify_subscription(callback: CallbackQuery, state: FSMContext):
@@ -634,8 +631,12 @@ async def verify_subscription(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text("✅ Вы успешно подписались на все каналы!")
         await asyncio.sleep(2)
         await callback.message.delete()
+        
+        # Отправляем контент ссылки
         await process_link(link_id, callback.message, callback.from_user.id)
-        await show_welcome(callback.message)  # Показываем приветствие после контента
+        
+        # Отправляем красивое приветствие после контента
+        await show_welcome(callback.message)
     else:
         keyboard = InlineKeyboardBuilder()
         keyboard.add(InlineKeyboardButton(
