@@ -570,13 +570,6 @@ async def cmd_start(message: Message, state: FSMContext):
         link_id = start_args[1]
         await state.update_data(link_id=link_id)
         
-        # Первое сообщение с кнопкой "Я выполнил"
-        keyboard = InlineKeyboardBuilder()
-        keyboard.add(InlineKeyboardButton(
-            text="✅ Я выполнил", 
-            callback_data="verify_subscription_step1"
-        ))
-        
         # Получаем список каналов от SubGram
         subgram_response = await check_subgram_subscription(
             user_id=user.id,
@@ -584,17 +577,27 @@ async def cmd_start(message: Message, state: FSMContext):
             first_name=user.first_name
         )
         
-        channels_text = "📢 Подпишитесь на каналы:\n\n"
-        if 'links' in subgram_response:
+        # Проверяем, есть ли каналы для подписки
+        has_channels = 'links' in subgram_response and len(subgram_response['links']) > 0
+        
+        if has_channels:
+            # Первое сообщение с кнопкой "Я выполнил" (только если есть каналы)
+            keyboard = InlineKeyboardBuilder()
+            keyboard.add(InlineKeyboardButton(
+                text="✅ Я выполнил", 
+                callback_data="verify_subscription_step1"
+            ))
+            
+            channels_text = "📢 Подпишитесь на каналы:\n\n"
             for link in subgram_response['links']:
                 channels_text += f"• {link}\n"
+            
+            await message.answer(
+                channels_text,
+                reply_markup=keyboard.as_markup()
+            )
         
-        await message.answer(
-            channels_text,
-            reply_markup=keyboard.as_markup()
-        )
-        
-        # Второе сообщение с кнопкой "Я подписался"
+        # Второе сообщение с кнопкой "Я подписался" (всегда)
         keyboard2 = InlineKeyboardBuilder()
         keyboard2.add(InlineKeyboardButton(
             text="✅ Я подписался", 
@@ -602,7 +605,7 @@ async def cmd_start(message: Message, state: FSMContext):
         ))
         
         await message.answer(
-            "После подписки нажмите кнопку ниже:",
+            "После подписки нажмите кнопку ниже:" if has_channels else "Нажмите кнопку ниже для продолжения:",
             reply_markup=keyboard2.as_markup()
         )
     else:
@@ -640,10 +643,13 @@ async def verify_subscription_step2(callback: CallbackQuery, state: FSMContext):
             callback_data="verify_subscription_step2"
         ))
         
-        channels_text = "📢 Необходимо подписаться на:\n"
-        if 'links' in subgram_response:
+        # Проверяем, есть ли каналы для отображения
+        if 'links' in subgram_response and subgram_response['links']:
+            channels_text = "📢 Необходимо подписаться на:\n"
             for link in subgram_response['links']:
                 channels_text += f"• {link}\n"
+        else:
+            channels_text = "❌ Не удалось проверить подписки. Попробуйте еще раз."
         
         await callback.message.edit_text(
             channels_text,
@@ -651,6 +657,34 @@ async def verify_subscription_step2(callback: CallbackQuery, state: FSMContext):
         )
     
     await callback.answer()
+    
+async def show_welcome(message: Message):
+    user = message.from_user
+    conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM users')
+    user_count = cursor.fetchone()[0]
+    conn.close()
+    
+    welcome_text = f"""
+👋 Привет, {hbold(user.first_name)}!
+
+Я Mirrozz Scripts — бот, который выдает актуальные скрипты и инжекторы для Roblox по ссылке! 🚀
+
+{hbold('Почему я лучший?')}
+• {hbold('Актуальные скрипты')} — база обновляется регулярно!
+• {hbold('Мгновенный доступ')} — получай скрипты в пару кликов!
+• {hbold('Надежное хранение')} — твои скрипты всегда под рукой!
+• {hbold('Стабильная работа')} — бот на мощном сервере, без сбоев!
+"""
+    if is_admin(user.id):
+        welcome_text += f"\n{hbold('👑 Вы администратор бота!')}\nДоступ к админ-панели: /admin"
+    if is_developer(user.id):
+        welcome_text += f"\n{hbold('💻 Вы разработчик бота!')}\nДоступ к панели разработчика: /admin"
+    
+    welcome_text += "\n\nНапиши /help, чтобы узнать все команды!"
+    
+    await message.answer(welcome_text)
 
 # Help command handler
 @dp.message(Command('help'))
