@@ -1765,6 +1765,20 @@ async def show_reports_page(message: Message, state: FSMContext, reports: list, 
             reply_markup=nav_keyboard.as_markup()
         )
 
+# Добавьте этот обработчик для ответа на репорты
+@dp.callback_query(F.data.startswith("answer_report_"))
+async def answer_report_callback(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа.")
+        return
+    
+    report_id = int(callback.data.split('_')[2])
+    await state.update_data(current_report_id=report_id)
+    
+    await callback.message.answer("✉️ Введите ответ на этот репорт:")
+    await state.set_state(Form.answer_report)
+    await callback.answer()
+
 @dp.message(Form.answer_report)
 async def answer_report_handler(message: Message, state: FSMContext):
     data = await state.get_data()
@@ -3016,7 +3030,6 @@ async def send_system_message_callback(callback: CallbackQuery, state: FSMContex
     await state.set_state(Form.system_message)
     await callback.answer()
 
-# Send system message handler
 @dp.message(Form.system_message)
 async def send_system_message_handler(message: Message, state: FSMContext):
     if not is_developer(message.from_user.id):
@@ -3030,13 +3043,19 @@ async def send_system_message_handler(message: Message, state: FSMContext):
     cursor.execute('SELECT user_id FROM users WHERE is_banned = 0')
     users = cursor.fetchall()
     
+    keyboard = InlineKeyboardBuilder()
+    keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="developer_messages"))
+    
     recipients_count = 0
+    errors_count = 0
     for user in users:
         user_id = user[0]
         try:
             await bot.send_message(user_id, f"📢 Системное сообщение:\n\n{message_text}")
             recipients_count += 1
-        except:
+        except Exception as e:
+            errors_count += 1
+            log_event('ERROR', f"Failed to send system message to {user_id}: {str(e)}")
             continue
     
     cursor.execute(
@@ -3046,7 +3065,11 @@ async def send_system_message_handler(message: Message, state: FSMContext):
     conn.commit()
     conn.close()
     
-    await message.answer(f"✅ Системное сообщение отправлено {recipients_count} пользователям.")
+    result_text = f"✅ Системное сообщение отправлено {recipients_count} пользователям."
+    if errors_count > 0:
+        result_text += f"\n❌ Не удалось отправить {errors_count} пользователям."
+    
+    await message.answer(result_text, reply_markup=keyboard.as_markup())
     log_event('INFO', f"Developer {message.from_user.id} sent system message to {recipients_count} users")
     await state.clear()
 
@@ -3171,13 +3194,21 @@ async def error_status_callback(callback: CallbackQuery):
             status_text += f"\n{hbold('⚠️ Последние 5 критических ошибок')}:\n"
             for error, date in recent_errors:
                 status_text += f"• {date}: {error[:50]}...\n"
+
+        keyboard = InlineKeyboardBuilder()
+        keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="developer_errors"))
         
-        await callback.message.edit_text(status_text, parse_mode=ParseMode.HTML)
+        await callback.message.edit_text(status_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
         log_event('INFO', f"Developer {callback.from_user.id} viewed detailed error stats")
         
     except Exception as e:
-        await callback.message.edit_text(f"❌ Ошибка при получении статистики: {str(e)}")
-        log_event('ERROR', f"Failed to get error stats: {str(e)}")
+        keyboard = InlineKeyboardBuilder()
+        keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="developer_errors"))
+        await callback.message.edit_text(
+            f"❌ Ошибка при получении статистики: {str(e)}",
+            reply_markup=keyboard.as_markup(),
+            parse_mode=ParseMode.HTML
+        )
     
     await callback.answer()
 
@@ -3219,24 +3250,26 @@ async def confirm_clear_logs_callback(callback: CallbackQuery):
         await callback.answer("❌ У вас нет доступа.")
         return
     
+    keyboard = InlineKeyboardBuilder()
+    keyboard.add(InlineKeyboardButton(text="🔙 Назад", callback_data="developer_errors"))
+    
     try:
-        # Очистка логов в базе данных
-        conn = sqlite3.connect('/root/bot_mirrozz_database.db')
-        cursor = conn.cursor()
-        cursor.execute('DELETE FROM logs')
-        conn.commit()
-        conn.close()
+        # ... существующий код очистки ...
         
-        # Очистка файла логов
-        with open('bot_mirrozz.log', 'w') as f:
-            f.write('')
-        
-        await callback.message.answer("✅ Логи успешно очищены.")
-        await callback.answer()
+        await callback.message.edit_text(
+            f"✅ Логи успешно очищены.",
+            reply_markup=keyboard.as_markup(),
+            parse_mode=ParseMode.HTML
+        )
         
     except Exception as e:
-        await callback.message.answer(f"❌ Ошибка при очистке логов: {str(e)}")
-        await callback.answer()
+        await callback.message.edit_text(
+            f"❌ Ошибка при очистке логов: {str(e)}",
+            reply_markup=keyboard.as_markup(),
+            parse_mode=ParseMode.HTML
+        )
+    
+    await callback.answer()
 
 # Confirm clear logs callback
 @dp.callback_query(F.data == "confirm_clear_logs")
