@@ -774,7 +774,6 @@ async def cmd_help(message: Message, state: FSMContext):
 {hbold('📚 Команды Mirrozz Scripts')}
 
 {hbold('/start')} — Начать работу с ботом
-{hbold('/help')} — Показать это сообщение
 {hbold('/user_stats')} — Показать вашу статистику
 {hbold('/report [сообщение]')} — Отправить жалобу администраторам
 {hbold('/catalog')} — Открыть каталог скриптов
@@ -783,8 +782,6 @@ async def cmd_help(message: Message, state: FSMContext):
         help_text += f"\n{hbold('👑 Админ-команды')}\n{hbold('/admin')} — Открыть админ-панель"
     
     await message.answer(help_text, parse_mode=ParseMode.HTML)
-    
-    await message.answer(help_text, parse_mode=ParseMode.HTML)  # <-- Эта строка дублирует отправку
     log_event('INFO', f"User {message.from_user.id} accessed help")
 
 # User stats command handler
