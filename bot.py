@@ -540,13 +540,29 @@ async def subgram_check_callback(callback: CallbackQuery, state: FSMContext):
         user_id = callback.from_user.id
         current_time = time.time()
         
-        # 1. Удаляем кнопку "Я подписался"
+        # Удаляем кнопку "Я подписался"
         await callback.message.edit_reply_markup(reply_markup=None)
         
-        # 2. Показываем сообщение о проверке
+        # Показываем сообщение о проверке
         checking_msg = await callback.message.answer("🔄 Проверяю ваши подписки...")
         
-        # 3. Выполняем проверку через SubGram API
+        # Получаем контекст команды из состояния или сообщения
+        data = await state.get_data()
+        command_context = data.get('command_context')
+        
+        # Если контекст не в состоянии, пробуем определить из сообщения
+        if not command_context:
+            if hasattr(callback.message, 'text'):
+                if callback.message.text.startswith('/start'):
+                    command_context = 'start'
+                elif callback.message.text.startswith('/help'):
+                    command_context = 'help'
+                elif callback.message.text.startswith('/catalog'):
+                    command_context = 'catalog'
+                elif callback.message.text.startswith('/user_stats'):
+                    command_context = 'user_stats'
+        
+        # Выполняем проверку через SubGram API
         subgram_response = await check_subgram_subscription(
             user_id=user_id,
             chat_id=callback.message.chat.id,
@@ -555,35 +571,37 @@ async def subgram_check_callback(callback: CallbackQuery, state: FSMContext):
             premium=callback.from_user.is_premium
         )
         
-        # 4. Обрабатываем результат проверки
         if subgram_response.get('status') == 'ok':
             # Успешная проверка
             LAST_SUBSCRIPTION_CHECK[user_id] = current_time
-            
-            # Удаляем сообщение о проверке
             await checking_msg.delete()
             
-            # 5. Получаем сохраненные данные из состояния
-            data = await state.get_data()
-            
-            # 6. Определяем тип контента для показа
-            if hasattr(callback.message, 'text') and callback.message.text.startswith('/start'):
-                # Обработка команды /start с ссылкой
+            # Выполняем действие в зависимости от контекста команды
+            if command_context == 'start':
                 parts = callback.message.text.split()
                 if len(parts) > 1:
                     link_id = parts[1]
                     await process_link(link_id, callback.message, user_id)
                 else:
                     await show_welcome(callback.message)
+            
+            elif command_context == 'help':
+                await cmd_help(callback.message)
+            
+            elif command_context == 'catalog':
+                await show_catalog_main_menu(callback.message)
+            
+            elif command_context == 'user_stats':
+                await cmd_user_stats(callback.message)
+            
             elif 'link_id' in data:
-                # Обработка сохраненной ссылки из состояния
                 await process_link(data['link_id'], callback.message, user_id)
                 await state.clear()
+            
             else:
-                # Показываем стандартное приветствие
                 await show_welcome(callback.message)
-                
-            # 7. Удаляем оригинальное сообщение с каналами
+            
+            # Удаляем оригинальное сообщение с каналами
             await asyncio.sleep(1)
             await callback.message.delete()
             
@@ -591,7 +609,10 @@ async def subgram_check_callback(callback: CallbackQuery, state: FSMContext):
             # Не все подписки оформлены
             await checking_msg.delete()
             
-            # 8. Формируем новый список каналов
+            # Сохраняем контекст команды в состоянии
+            await state.update_data(command_context=command_context)
+            
+            # Формируем новый список каналов
             channels_text = "❌ Вы не подписаны на все каналы:\n\n"
             if 'links' in subgram_response:
                 for link in subgram_response['links']:
@@ -601,16 +622,16 @@ async def subgram_check_callback(callback: CallbackQuery, state: FSMContext):
                     if sponsor['status'] != 'subscribed':
                         channels_text += f"• {sponsor['link']}\n"
             
-            channels_text += "📢 Для использования бота подпишитесь на каналы, нажмите на кнопку 'Я выполнил' и затем нажмите на кнопку ниже ↓\n"
+            channels_text += "📢 Для использования бота подпишитесь на каналы, затем нажмите 'Я выполнил' и нажмите кнопку ниже ↓\n"
             
-            # 9. Создаем новую кнопку
+            # Создаем новую кнопку
             keyboard = InlineKeyboardBuilder()
             keyboard.add(InlineKeyboardButton(
                 text="✅ Я подписался", 
                 callback_data="subgram_check"
             ))
             
-            # 10. Обновляем сообщение
+            # Обновляем сообщение
             await callback.message.edit_text(
                 channels_text,
                 reply_markup=keyboard.as_markup()
@@ -747,7 +768,8 @@ async def show_welcome(message: Message):
 
 # Help command handler
 @dp.message(Command('help'))
-async def cmd_help(message: Message):
+async def cmd_help(message: Message, state: FSMContext):
+    await state.update_data(command_context='help')
     help_text = f"""
 {hbold('📚 Команды Mirrozz Scripts')}
 
@@ -755,16 +777,20 @@ async def cmd_help(message: Message):
 {hbold('/help')} — Показать это сообщение
 {hbold('/user_stats')} — Показать вашу статистику
 {hbold('/report [сообщение]')} — Отправить жалобу администраторам
+{hbold('/catalog')} — Открыть каталог скриптов
 """
     if is_admin(message.from_user.id):
         help_text += f"\n{hbold('👑 Админ-команды')}\n{hbold('/admin')} — Открыть админ-панель"
+    
+    await message.answer(help_text, parse_mode=ParseMode.HTML)
     
     await message.answer(help_text, parse_mode=ParseMode.HTML)
     log_event('INFO', f"User {message.from_user.id} accessed help")
 
 # User stats command handler
 @dp.message(Command('user_stats'))
-async def cmd_user_stats(message: Message):
+async def cmd_user_stats(message: Message, state: FSMContext):
+    await state.update_data(command_context='user_stats')
     if is_banned(message.from_user.id):
         await message.answer("❌ Вы заблокированы в этом боте.")
         return
@@ -871,9 +897,9 @@ async def cmd_report(message: Message, state: FSMContext):
 # Команда /catalog
 @dp.message(Command('catalog'))
 async def cmd_catalog(message: Message, state: FSMContext):
-    if is_banned(message.from_user.id):
-        await message.answer("❌ Вы заблокированы в этом боте.")
-        return
+    await state.update_data(command_context='catalog')
+    await message.answer("❌ Вы заблокированы в этом боте.")
+    return
     
     # Проверка подписки через SubGram
     subgram_response = await check_subgram_subscription(
@@ -1207,10 +1233,35 @@ async def skip_script_image(message: Message, state: FSMContext):
 async def process_script_image_handler(message: Message, state: FSMContext):
     if message.photo:
         image_id = message.photo[-1].file_id
-    else:
+    elif message.text == '/skip':
         image_id = None
+    else:
+        await message.answer("Пожалуйста, отправьте изображение или нажмите /skip")
+        return
     
-    await process_script_image(message, state, image_id)
+    data = await state.get_data()
+    
+    # Создаем предпросмотр поста
+    preview_text = f"""
+📜 <b>Предпросмотр скрипта</b>
+
+🎮 <b>Название:</b> {data['name']}
+📝 <b>Описание:</b> {data['description']}
+🔑 <b>Ключ система:</b> {'✅ Да' if data.get('has_key', 0) else '❌ Нет'}
+🖼 <b>Изображение:</b> {'Есть' if image_id else 'Нет'}
+"""
+    
+    keyboard = InlineKeyboardBuilder()
+    keyboard.add(InlineKeyboardButton(text="✅ Готово", callback_data="confirm_script_post"))
+    keyboard.add(InlineKeyboardButton(text="✏️ Редактировать", callback_data="edit_script_post"))
+    keyboard.add(InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_script_post"))
+    
+    if image_id:
+        await message.answer_photo(image_id, caption=preview_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
+    else:
+        await message.answer(preview_text, reply_markup=keyboard.as_markup(), parse_mode=ParseMode.HTML)
+    
+    await state.update_data(image_id=image_id, preview_shown=True)
 
 async def process_script_image(message: Message, state: FSMContext, image_id: str = None):
     data = await state.get_data()
@@ -1236,6 +1287,34 @@ async def process_script_image(message: Message, state: FSMContext, image_id: st
     
     await message.answer(f"✅ Скрипт успешно добавлен в каталог! ID: {script_id}")
     await state.clear()
+
+@dp.callback_query(F.data == "confirm_script_post")
+async def confirm_script_post(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    
+    conn = sqlite3.connect('/root/mirrozz_catalog_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO scripts (name, description, script_code, menu, has_key, created_by, creation_date, image_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        data['name'],
+        data['description'],
+        data['script_code'],
+        data['menu'],
+        data.get('has_key', 0),
+        callback.from_user.id,
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        data.get('image_id')
+    ))
+    script_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer(f"✅ Скрипт успешно добавлен в каталог! ID: {script_id}")
+    await state.clear()
+    await show_catalog_main_menu(callback.message)
 
 @dp.callback_query(F.data == "catalog_list_scripts")
 async def catalog_list_scripts_callback(callback: CallbackQuery):
