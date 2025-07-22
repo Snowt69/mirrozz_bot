@@ -784,7 +784,7 @@ async def cmd_help(message: Message, state: FSMContext):
     
     await message.answer(help_text, parse_mode=ParseMode.HTML)
     
-    await message.answer(help_text, parse_mode=ParseMode.HTML)
+    await message.answer(help_text, parse_mode=ParseMode.HTML)  # <-- Эта строка дублирует отправку
     log_event('INFO', f"User {message.from_user.id} accessed help")
 
 # User stats command handler
@@ -898,9 +898,6 @@ async def cmd_report(message: Message, state: FSMContext):
 @dp.message(Command('catalog'))
 async def cmd_catalog(message: Message, state: FSMContext):
     await state.update_data(command_context='catalog')
-    await message.answer("❌ Вы заблокированы в этом боте.")
-    return
-    
     # Проверка подписки через SubGram
     subgram_response = await check_subgram_subscription(
         user_id=message.from_user.id,
