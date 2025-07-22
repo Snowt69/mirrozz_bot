@@ -557,15 +557,21 @@ async def subgram_check_with_message_callback(callback: CallbackQuery):
         await callback.answer("❌ Произошла ошибка при проверке подписки")
 
 def check_subscription_required(handler):
-    async def wrapper(message: Union[Message, CallbackQuery], *args, **kwargs):
-        # Для админов/разработчиков пропускаем проверку
-        if isinstance(message, Message):
-            user_id = message.from_user.id
-        else:
-            user_id = message.from_user.id
+    async def wrapper(*args, **kwargs):
+        # Определяем message из аргументов
+        message = None
+        for arg in args:
+            if isinstance(arg, (Message, CallbackQuery)):
+                message = arg
+                break
+        
+        if not message:
+            return await handler(*args, **kwargs)
             
+        # Для админов/разработчиков пропускаем проверку
+        user_id = message.from_user.id
         if is_admin(user_id) or is_developer(user_id):
-            return await handler(message, *args, **kwargs)
+            return await handler(*args, **kwargs)
             
         # Проверяем подписку
         subgram_response = await check_subgram_subscription(
@@ -602,26 +608,78 @@ def check_subscription_required(handler):
                 )
             return
             
-        return await handler(message, *args, **kwargs)
+        return await handler(*args, **kwargs)
     return wrapper
 
 @dp.message(CommandStart())
 @check_subscription_required
 async def cmd_start(message: Message, state: FSMContext):
-    start_args = message.text.split()
-    user = message.from_user
-    
-    if is_banned(user.id):
-        return await message.answer("❌ Вы заблокированы в этом боте.")
-    
-    update_user_visit(user.id, user.username, user.first_name, user.last_name)
-    
-    if len(start_args) > 1:
-        link_id = start_args[1]
-        await state.update_data(link_id=link_id)
-        await process_link(link_id, message, user.id)
-    
-    await show_welcome(message)
+    """Обработчик команды /start с расширенной функциональностью"""
+    try:
+        # Получаем аргументы команды
+        start_args = message.text.split()
+        user = message.from_user
+        
+        # Логирование начала обработки
+        log_event('INFO', f"User {user.id} started bot with args: {start_args[1:] if len(start_args) > 1 else 'no args'}")
+        
+        # Проверка бана пользователя
+        if is_banned(user.id):
+            await message.answer("❌ Вы заблокированы в этом боте.")
+            log_event('WARNING', f"Banned user {user.id} tried to access the bot")
+            return
+        
+        # Обновляем статистику пользователя
+        update_user_visit(user.id, user.username, user.first_name, user.last_name)
+        
+        # Обработка ссылки, если она есть
+        if len(start_args) > 1:
+            link_id = start_args[1]
+            await state.update_data(link_id=link_id)
+            
+            # Проверяем существование ссылки
+            conn = sqlite3.connect('/root/bot_mirrozz_database.db')
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM links WHERE link_id = ?', (link_id,))
+            link = cursor.fetchone()
+            conn.close()
+            
+            if not link:
+                await message.answer("❌ Ссылка не найдена или была удалена")
+                log_event('WARNING', f"User {user.id} tried to access invalid link: {link_id}")
+            else:
+                await process_link(link_id, message, user.id)
+                return
+        
+        # Показываем приветственное сообщение
+        await show_welcome(message)
+        
+        # Для новых пользователей можно добавить дополнительную информацию
+        user_info = get_user_info(user.id)
+        if user_info and user_info['visit_count'] == 1:
+            await message.answer(
+                "📌 Это ваш первый визит! Вот что вы можете сделать:\n"
+                "- Используйте /help для списка команд\n"
+                "- Создавайте ссылки через админ-панель (если вы админ)\n"
+                "- Отправляйте репорты через /report"
+            )
+            
+    except Exception as e:
+        log_event('ERROR', f"Error in cmd_start for user {message.from_user.id}: {str(e)}")
+        await message.answer("⚠️ Произошла ошибка при обработке команды. Пожалуйста, попробуйте позже.")
+        
+        # Уведомление разработчиков об ошибке
+        for dev_id in DEVELOPERS:
+            try:
+                await bot.send_message(
+                    dev_id,
+                    f"🚨 Ошибка в cmd_start:\n"
+                    f"User: {message.from_user.id}\n"
+                    f"Error: {str(e)}\n"
+                    f"Message: {message.text}"
+                )
+            except Exception as notify_error:
+                log_event('ERROR', f"Failed to notify developer {dev_id}: {str(notify_error)}")
 
 @dp.callback_query(F.data == "verify_subscription")
 async def verify_subscription(callback: CallbackQuery, state: FSMContext):
